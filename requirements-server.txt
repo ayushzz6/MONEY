@@ -1,0 +1,15 @@
+# What the engine and dashboard need on a server (requirements.txt adds research and ML extras)
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+numpy>=1.26.3
+pandas>=2.2.0
+SQLAlchemy>=2.0.25
+requests>=2.31.0
+smartapi-python>=1.3.1
+pyotp>=2.9.0
+logzero>=1.7.0
+websocket-client>=1.8.0
+python-dotenv>=1.0.0
+google-generativeai>=0.3.2

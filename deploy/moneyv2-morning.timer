@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart MONEYV2 at 08:45 IST on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 08:45 Asia/Kolkata
+Persistent=false
+
+[Install]
+WantedBy=timers.target

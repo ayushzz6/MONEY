@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart MONEYV2 before the open (fresh Angel One login, socket and day's candles)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart moneyv2.service

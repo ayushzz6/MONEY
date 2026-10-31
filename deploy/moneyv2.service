@@ -1,0 +1,16 @@
+[Unit]
+Description=MONEYV2 trading engine and dashboard (127.0.0.1:8050)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/MONEY
+ExecStart=/home/ubuntu/MONEY/run.sh
+Restart=always
+RestartSec=15
+# the engine journals trades and restores open ones on start; give it time to stop cleanly
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
