@@ -1,0 +1,39 @@
+from enum import Enum
+
+class Regime(str, Enum):
+    TREND_UP = "TREND_UP"
+    TREND_DOWN = "TREND_DOWN"
+    SIDEWAYS = "SIDEWAYS"
+    BREAKOUT = "BREAKOUT"
+    HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    LOW_VOLATILITY = "LOW_VOLATILITY"
+    RISK_OFF = "RISK_OFF"
+    TRANSITION = "TRANSITION"
+    UNKNOWN = "UNKNOWN"
+
+class SignalType(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    HOLD = "HOLD"
+
+class OrderSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+class OrderStatus(str, Enum):
+    CREATED = "CREATED"
+    VALIDATED = "VALIDATED"
+    SUBMITTED = "SUBMITTED"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
+
+class EnvironmentMode(str, Enum):
+    BACKTEST = "BACKTEST"
+    PAPER = "PAPER"
+    SHADOW = "SHADOW"
+    LIVE = "LIVE"
+    EMERGENCY_STOP = "EMERGENCY_STOP"

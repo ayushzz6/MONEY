@@ -1,0 +1,120 @@
+{
+  "mode": "PAPER",
+  "capital_inr": 100000,
+  "cash_buffer_pct": 10,
+  "intraday_leverage": 1,
+  "max_position_pct": 30,
+  "max_order_inr": 30000,
+  "min_order_inr": 2000,
+  "max_loss_per_trade_inr": 500,
+  "max_daily_loss_inr": 2000,
+  "max_trades_per_day": 6,
+  "max_trades_per_symbol": 1,
+  "max_open_positions": 3,
+  "max_orders_per_day": 40,
+  "min_reward_risk": 1.5,
+  "min_risk_pct": 0.15,
+  "max_risk_pct": 2.5,
+  "max_entry_slip_pct": 0.3,
+  "require_stop": true,
+  "no_entries_before": "09:30",
+  "no_entries_after": "14:30",
+  "flat_by": "15:10",
+  "allow_short": false,
+  "blocked": [],
+  "approval_timeout_seconds": 120,
+  "strategies": {
+    "orb": {
+      "enabled": true,
+      "or_minutes": 15,
+      "stop": "or_mid",
+      "target_r": 2.0,
+      "min_or_rvol": 1.5,
+      "min_volume_x": 0,
+      "min_or_pct": 0.3,
+      "max_or_pct": 3.0,
+      "short": true
+    },
+    "level_breakout": {
+      "enabled": true,
+      "near_pct": 3.0,
+      "max_gap_pct": 1.5,
+      "stop": "swing:3",
+      "target_r": 2.0
+    },
+    "vwap_reclaim": {
+      "enabled": true,
+      "not_before": "10:00",
+      "stop": "swing",
+      "target_r": 2.0
+    },
+    "order_block": {
+      "enabled": true,
+      "paper_only": true,
+      "picks_only": true,
+      "min_aligned": 4,
+      "stop": "zone",
+      "target": "T2",
+      "target_r": 2.0
+    }
+  },
+  "market_filter": {
+    "enabled": true,
+    "symbol": "^NSEI"
+  },
+  "timemachine": {
+    "enabled": true,
+    "replays": 5000,
+    "seed": 19,
+    "window": 2,
+    "min_sessions": 20,
+    "max_neither": 0.75,
+    "min_mc_avg_r": -0.15,
+    "min_history_trades": 5,
+    "min_history_avg_r": -0.05
+  },
+  "auto_select": {
+    "enabled": true,
+    "min_trades": 15,
+    "min_expectancy_r": 0.0
+  },
+  "universe": {
+    "min_price": 50,
+    "min_turnover_cr": 15,
+    "watchlist_size": 50
+  },
+  "backtest": {
+    "universe_size": 100
+  },
+  "data": {
+    "provider": "auto",
+    "poll_seconds": 15,
+    "bar_delay_seconds": 20,
+    "stale_seconds": 180
+  },
+  "news": {
+    "enabled": true,
+    "poll_minutes": 20,
+    "lookback_hours": 24,
+    "block_tags": [
+      "legal_risk"
+    ]
+  },
+  "costs": {
+    "brokerage_per_order_inr": 20,
+    "brokerage_pct": 0.03,
+    "stt_sell_pct": 0.025,
+    "exchange_txn_pct": 0.00297,
+    "sebi_pct": 0.0001,
+    "stamp_buy_pct": 0.003,
+    "gst_pct": 18
+  },
+  "slippage_bps": 5,
+  "notify": {
+    "desktop": true,
+    "telegram": false
+  },
+  "llm_veto": {
+    "enabled": false
+  }
+}

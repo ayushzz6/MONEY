@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MONEYV2 Trading Desk</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Main menu">
+    <div class="brand"><span class="logo">₹</span><div><b>MONEYV2</b><small>NSE day-trading bot</small></div></div>
+    <nav class="nav" id="nav">
+      <div class="nav-label">Trading</div>
+      <a href="#home" data-page="home"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home<span class="count" id="nc-home"></span></a>
+      <a href="#live" data-page="live"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/></svg>Live chart</a>
+      <a href="#ob" data-page="ob"><svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8M3 20h18"/></svg>Order blocks<span class="count" id="nc-ob"></span></a>
+      <a href="#signals" data-page="signals"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Signals<span class="count" id="nc-signals"></span></a>
+      <a href="#trades" data-page="trades"><svg viewBox="0 0 24 24"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>Trades<span class="count" id="nc-trades"></span></a>
+      <a href="#alerts" data-page="alerts"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 21h4"/></svg>Alerts</a>
+      <div class="nav-label">Research &amp; markets</div>
+      <a href="#strategies" data-page="strategies"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>Strategies</a>
+      <a href="#research" data-page="research"><svg viewBox="0 0 24 24"><path d="M10 3v6L4 19a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2l-6-10V3M8 3h8"/></svg>Research</a>
+      <a href="#intel" data-page="intel"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h5"/></svg>Market intel<span class="count" id="nc-intel"></span></a>
+      <div class="nav-label">System</div>
+      <a href="#skills" data-page="skills"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.9H21l-5.4 4.2 2 6.9L12 15.8 6.4 20l2-6.9L3 8.9h6.6z"/></svg>Skills</a>
+      <a href="#settings" data-page="settings"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/></svg>Settings &amp; safety</a>
+      <a href="#help" data-page="help"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 1-1 1.7M12 17h.01"/></svg>Help</a>
+    </nav>
+    <div class="side-foot">
+      <div class="mode-box" id="mode-box"><b>…</b></div>
+      <button id="btn-theme" type="button">Switch to dark mode</button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button id="btn-menu" class="icon-btn only-mobile" type="button" aria-label="Open menu" aria-controls="sidebar">☰</button>
+      <div class="title"><h1 id="page-title">Home</h1><p id="page-sub"></p></div>
+      <div class="status" aria-live="polite">
+        <span class="pill" id="st-market"><span class="dot"></span><span>connecting…</span></span>
+        <span class="pill" id="st-data"><span class="dot"></span><span>data</span></span>
+        <span class="pill" id="st-safety"><span class="dot"></span><span>safety</span></span>
+      </div>
+      <div class="actions">
+        <button id="btn-halt" type="button" title="Stop the bot from opening any new trade">Pause new trades</button>
+        <button id="btn-resume" type="button" class="primary hidden" title="Let the bot open new trades again">Resume trading</button>
+        <button id="btn-flatten" type="button" class="danger" title="Close every open position at market price">Exit all positions</button>
+      </div>
+    </header>
+
+    <div id="banner-fatal" class="banner bad hidden" role="alert"></div>
+    <div id="banner-approve" class="banner warn hidden" role="alert"></div>
+
+    <main id="view">
+      <!-- HOME -->
+      <section class="page" id="page-home">
+        <div class="card hero" id="home-hero"></div>
+        <div id="home-attention"></div>
+        <div class="tiles" id="home-tiles"></div>
+        <div class="card flush"><div class="card-head"><h2>Order-block picks</h2><span class="muted small" id="home-ob-note"></span><a href="#ob">Full board →</a></div><div id="home-ob"></div></div>
+        <div class="grid-2">
+          <div class="card flush"><div class="card-head"><h2>Open positions</h2><a href="#trades">All trades →</a></div><div id="home-positions"></div></div>
+          <div class="card flush"><div class="card-head"><h2>Latest signals</h2><a href="#signals">All signals →</a></div><ul class="feed" id="home-signals"></ul></div>
+        </div>
+        <div class="grid-2">
+          <div class="card flush"><div class="card-head"><h2>Coming up for your stocks</h2><a href="#intel">Market intel →</a></div><div id="home-upcoming"></div></div>
+          <div class="card flush"><div class="card-head"><h2>Recent activity</h2><a href="#alerts">Full log →</a></div><ul class="feed" id="home-activity"></ul></div>
+        </div>
+      </section>
+
+      <!-- LIVE CHART -->
+      <section class="page hidden" id="page-live">
+        <div class="live-grid">
+          <div class="card">
+            <div class="card-head">
+              <h2 id="chart-title">Chart</h2><span id="chart-source" class="muted small"></span><span class="grow"></span>
+              <input id="chart-symbol" placeholder="Type a symbol, e.g. RELIANCE" size="24" aria-label="Show chart for symbol" autocomplete="off">
+            </div>
+            <div class="chart-legend">
+              <span><span class="swatch" style="background:var(--series-1)"></span>VWAP (average price today)</span>
+              <span><span class="swatch dash"></span>Opening range high / low</span>
+              <span><span class="swatch" style="background:var(--critical)"></span>Stop-loss</span>
+              <span><span class="swatch" style="background:var(--good)"></span>Target</span>
+              <span class="muted">5-minute candles, India time. Hollow = price rose, filled = fell.</span>
+            </div>
+            <div class="ohlc num" id="ohlc"></div>
+            <div id="chart"></div>
+            <div class="chart-info" id="chart-info"></div>
+          </div>
+          <div class="card watch-card">
+            <div class="card-head"><h2>Watchlist</h2><span id="watch-count" class="muted small"></span></div>
+            <input id="watch-filter" placeholder="Filter by symbol or setup…" aria-label="Filter the watchlist">
+            <div class="watch-list" id="watch-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ORDER BLOCKS -->
+      <section class="page hidden" id="page-ob">
+        <div id="ob-head"></div>
+        <div class="tabs" role="tablist" id="ob-tabs">
+          <button role="tab" data-obtab="board" aria-selected="true">Board</button>
+          <button role="tab" data-obtab="confirm">Confirmations</button>
+          <button role="tab" data-obtab="map">Market map</button>
+          <button role="tab" data-obtab="sectors">Sectors</button>
+        </div>
+        <div id="ob-board"></div>
+        <div id="ob-confirm" class="hidden"></div>
+        <div id="ob-map" class="hidden"></div>
+        <div id="ob-sectors" class="hidden"></div>
+        <div class="card" id="ob-detail-card">
+          <div class="card-head"><h2 id="ob-title">Pick a stock on the board</h2><span class="muted small" id="ob-src"></span></div>
+          <div class="ob-detail">
+            <div><div class="chart-legend">
+              <span><span class="swatch" style="background:var(--up)"></span>Bullish zone</span>
+              <span><span class="swatch" style="background:var(--down)"></span>Bearish zone</span>
+              <span><span class="swatch dash"></span>Earlier zones of the day</span>
+              <span><span class="swatch" style="background:var(--series-1)"></span>VWAP</span>
+              <span><span class="swatch" style="background:var(--warning)"></span>Levels behind the setup</span>
+              <span><span class="swatch" style="background:var(--cpr)"></span>CPR (central pivot range)</span></div>
+              <div id="ob-chart"></div></div>
+            <div id="ob-fields"></div>
+          </div>
+        </div>
+        <p class="note">How it ranks: strength = the move since yesterday's close in ATRs × how straight today's path was × where the price sits in the day's range;
+          choppy stocks (straightness under 25%) score zero. An order block is the last opposite candle before a 5-minute close through the last swing high or low.
+          Picks: the top 3 on each side, at most 2 from one sector, never a stock that moved over 3 ATR or 8% (event risk).
+          <b>Backtested on the last 2 years:</b> buying or selling the first retest of these zones lost about ₹14,000 a month on ₹1 lakh after costs
+          (<a href="/reports/obtest_report.html" target="_blank" rel="noopener">report</a>), so use the board as a screener, not as trade signals.
+          Analytics only, not investment advice.</p>
+      </section>
+
+      <!-- SIGNALS -->
+      <section class="page hidden" id="page-signals">
+        <div class="card">
+          <div class="filter-chips" id="sig-filters" role="group" aria-label="Show signals"></div>
+          <p class="note">A signal is a moment a strategy's rule matched. The bot then decides: <b>Traded</b> (order sent), <b>Approve?</b> (LIVE, waiting for you),
+            <b>Blocked</b> (a risk rule said no), <b>Benched</b> (the Time Machine's odds were too weak) or <b>Skipped</b> (e.g. limit of trades reached).</p>
+        </div>
+        <div class="card flush"><ul class="feed" id="sig-list"></ul></div>
+      </section>
+
+      <!-- TRADES -->
+      <section class="page hidden" id="page-trades">
+        <div class="tabs" role="tablist" id="trade-tabs">
+          <button role="tab" data-ttab="today" aria-selected="true">Today</button>
+          <button role="tab" data-ttab="history">History (90 days)</button>
+        </div>
+        <div id="trades-today">
+          <div class="card flush"><div class="card-head"><h2>Today's trades</h2><span class="muted small" id="trades-note"></span></div><div class="table-wrap" id="trades-table"></div></div>
+        </div>
+        <div id="trades-history" class="hidden"></div>
+      </section>
+
+      <!-- ALERTS -->
+      <section class="page hidden" id="page-alerts">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>Add a price alert</h2></div>
+            <form class="form-row" id="alert-form">
+              <input name="symbol" placeholder="Symbol" size="12" required aria-label="Symbol" autocomplete="off">
+              <select name="op" aria-label="Condition"><option value="above">rises to or above</option><option value="below">falls to or below</option></select>
+              <input name="price" placeholder="Price ₹" size="10" inputmode="decimal" required aria-label="Price">
+              <input name="note" placeholder="Note (optional)" size="18" aria-label="Note">
+              <button class="primary" type="submit">Add alert</button>
+            </form>
+            <p class="note">Each alert rings once: here, as a desktop notification, and on Telegram if it is set up.</p>
+            <div class="table-wrap" id="palerts"></div>
+          </div>
+          <div class="card flush">
+            <div class="card-head"><h2>Activity log</h2><span class="grow"></span><select id="log-filter" aria-label="Filter the log"></select></div>
+            <ul class="feed scroll" style="max-height:640px" id="log-list"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STRATEGIES -->
+      <section class="page hidden" id="page-strategies">
+        <div class="card"><div class="card-head"><h2>How the bot chooses what to trade</h2><span class="grow"></span><button id="btn-backtest" data-job="backtest">Re-test strategies now</button></div>
+          <p class="lead">Each strategy is a fixed rule. Every morning the bot re-tests all of them on the last weeks of NSE data, after charges.
+            Only those that still make money may trade today. Paper mode also allows "probation" strategies that have too few trades to judge.</p>
+          <div id="bt-meta" class="note"></div></div>
+        <div class="cards" id="strategy-cards"></div>
+        <div class="grid-2">
+          <div class="card"><h3>Re-test result: account value over the test period (after costs)</h3><div id="equity"></div></div>
+          <div class="card"><h3>Re-test totals</h3><div id="bt-overall"></div></div>
+        </div>
+      </section>
+
+      <!-- RESEARCH -->
+      <section class="page hidden" id="page-research">
+        <div id="research-body"><div class="card"><p class="empty">Loading research…</p></div></div>
+      </section>
+
+      <!-- MARKET INTEL -->
+      <section class="page hidden" id="page-intel">
+        <div class="tabs" role="tablist" id="intel-tabs">
+          <button role="tab" data-itab="news" aria-selected="true">News</button>
+          <button role="tab" data-itab="results">Results (earnings)</button>
+          <button role="tab" data-itab="deals">Big-money deals</button>
+        </div>
+        <div id="intel-news">
+          <div class="card flush"><div class="card-head"><h2>Headlines for the watchlist</h2><span class="grow"></span><button class="small" data-job="news">Refresh news</button></div>
+            <ul class="feed" id="news-list"></ul></div>
+        </div>
+        <div id="intel-results" class="hidden">
+          <div class="page">
+            <div class="card">
+              <div class="card-head"><h2>Look up a company's results</h2></div>
+              <form class="search-row" id="results-form"><input name="symbol" placeholder="Symbol, e.g. TCS" aria-label="Symbol" autocomplete="off"><button class="primary" type="submit">Show results</button></form>
+              <div id="results-view"><p class="note">Revenue, margins, net profit and EPS for the last quarters, each against the quarter before and a year earlier (Yahoo Finance).</p></div>
+            </div>
+            <div class="card flush">
+              <div class="card-head"><h2>Results calendar</h2><span class="grow"></span>
+                <select id="cal-scope" aria-label="Which companies"><option value="watchlist">My watchlist</option><option value="nifty500" selected>NIFTY 500</option><option value="all">All NSE</option></select></div>
+              <div class="table-wrap scroll" style="max-height:560px" id="cal-table"></div>
+            </div>
+          </div>
+        </div>
+        <div id="intel-deals" class="hidden">
+          <div class="card flush">
+            <div class="card-head"><h2>Bulk and block deals</h2><span id="deals-asof" class="muted small"></span><span class="grow"></span>
+              <select id="deals-scope" aria-label="Which stocks"><option value="watchlist">My watchlist</option><option value="nifty500" selected>NIFTY 500</option><option value="all">All NSE</option></select>
+              <button class="small" data-job="intel/refresh">Refresh</button></div>
+            <p class="note" style="padding:0 16px">Who bought or sold big. A <b>bulk deal</b> is one client trading over 0.5% of a company's shares in a day; a <b>block deal</b> is a single trade of ₹10 crore or more.
+              NSE posts them after each session. A buyer and seller with the same name on the same day is usually an intraday trading firm, not an investor.
+              Past sessions show at most 70 bulk deals each (NSE's limit); the latest session is complete.</p>
+            <div class="table-wrap scroll" style="max-height:640px" id="deals-table"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SKILLS -->
+      <section class="page hidden" id="page-skills">
+        <div class="card">
+          <div class="card-head"><h2>All 11 skills from day-trader-skill, rebuilt for NSE</h2></div>
+          <p class="lead">Every skill from <a href="https://github.com/Jakeschincariol/day-trader-skill" target="_blank" rel="noopener noreferrer">github.com/Jakeschincariol/day-trader-skill</a>
+            runs inside the bot. The originals target US stocks (Alpaca, NYSE, SEC). Each one here is the NSE / Angel One version. A trade passes through them in this order:</p>
+          <div class="pipeline" id="skill-pipeline"></div>
+        </div>
+        <div class="cards" id="skill-cards"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="page hidden" id="page-settings">
+        <div class="grid-2">
+          <div class="card" id="set-mode"></div>
+          <div class="card" id="set-safety"></div>
+        </div>
+        <div class="card"><div class="card-head"><h2>Your risk rules</h2></div><ul class="rule-list" id="set-rules"></ul>
+          <p class="note">To change a rule, edit <code>configs/trading.json</code> and restart the bot. They are not editable here, so a stray click cannot loosen a limit.</p></div>
+        <div class="grid-2">
+          <div class="card" id="set-data"></div>
+          <div class="card" id="set-jobs"></div>
+        </div>
+      </section>
+
+      <!-- HELP -->
+      <section class="page hidden" id="page-help">
+        <div class="card"><div class="card-head"><h2>How the bot works, in one minute</h2></div>
+          <ol class="steps">
+            <li><div><b>Before the open</b>, it scans the NIFTY 500 and picks the ~50 stocks worth watching. It also re-tests every strategy and reads the news, results calendar and big deals.</div></li>
+            <li><div><b>From 09:15</b> it reads a new 5-minute candle for every watchlist stock. When a strategy's rule matches, that is a <b>signal</b>.</div></li>
+            <li><div>Before acting, it sets the <b>stop-loss and target</b>, sizes the trade so a stop-out costs at most your limit, checks every <b>risk rule</b>, and replays the setup in the <b>Time Machine</b>.</div></li>
+            <li><div>In <b>Paper mode</b> it trades with practice money by itself. In <b>LIVE mode</b> every entry waits for you to press <b>Approve</b>; exits happen automatically.</div></li>
+            <li><div>It closes everything by the <b>flat-by time</b> (15:10) and writes the day into the journal.</div></li>
+          </ol>
+        </div>
+        <div class="grid-2">
+          <div class="card"><div class="card-head"><h2>Your daily routine</h2></div>
+            <ol class="steps">
+              <li><div>Start the bot: <code>./run.sh</code> in the MONEYV2 folder, then open <a href="/">this page</a>.</div></li>
+              <li><div>Glance at <a href="#home">Home</a>: mode, market status, and anything under "Needs your attention".</div></li>
+              <li><div>During the day, approve or reject trades (LIVE only) from the yellow bar at the top.</div></li>
+              <li><div>If anything looks wrong, press <b>Pause new trades</b>. <b>Exit all positions</b> closes everything at market.</div></li>
+              <li><div>After the close, review <a href="#trades">Trades → History</a>.</div></li>
+            </ol></div>
+          <div class="card"><div class="card-head"><h2>Safety built in</h2></div>
+            <ul class="rule-list">
+              <li><span class="k">Paper by default</span><span class="v">No real order is ever sent unless <code>TRADING_MODE=LIVE</code> is set in <code>.env</code>.</span></li>
+              <li><span class="k">Your yes for every entry</span><span class="v">In LIVE mode each new trade waits for Approve and expires if you do not answer.</span></li>
+              <li><span class="k">Daily loss limit</span><span class="v">After the day's loss limit, no new trades until tomorrow.</span></li>
+              <li><span class="k">Local only</span><span class="v">This page only works on this computer (127.0.0.1), and other websites cannot press its buttons.</span></li>
+            </ul></div>
+        </div>
+        <div class="card"><div class="card-head"><h2>Words you will see</h2></div><dl class="glossary" id="glossary"></dl></div>
+      </section>
+    </main>
+    <p class="disclaimer">Signals are rule matches, not predictions. Backtests describe the past, not the future, and are not investment advice.
+      A stop-loss is an order, not a guarantee: a gap can fill worse. Most intraday traders lose money.</p>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="dialog">
+    <h3 id="modal-title"></h3>
+    <p id="modal-text"></p>
+    <input id="modal-input" class="hidden" aria-label="Reason">
+    <div class="buttons"><button id="modal-cancel" type="button">Cancel</button><button id="modal-ok" type="button" class="primary">OK</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<div class="tooltip" id="tip"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
