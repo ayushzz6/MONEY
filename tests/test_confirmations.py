@@ -155,11 +155,12 @@ def test_buildup_lists_name_each_contract_s_stock(monkeypatch):
             if params["datatype"] == "Short Covering":
                 return {"status": False, "message": "rate limit"}
             return {"status": True, "data": [{"tradingSymbol": "M&M25NOV26FUT", "ltp": "3100.5", "percentChange": "2.1",
-                                              "opnInterest": "123456", "netChangeOpnInterest": "-5000"}]}
+                                              "opnInterest": "8383.5", "netChangeOpnInterest": "330.75"}]}
     b = fno.BuildUpLists()
     b.refresh(Api(), {"M&M25NOV26FUT": None}.get)
     row = b.lists["long build-up"][0]
-    assert row["symbol"] == "M&M" and row["chg_pct"] == 2.1 and row["oi_chg"] == -5000.0
+    assert row["symbol"] == "M&M" and row["chg_pct"] == 2.1
+    assert row["oi"] == 8383500.0 and row["oi_chg"] == 330750.0 and row["oi_chg_pct"] == 4.11   # thousands of shares -> shares
     assert "short covering" not in b.lists and "rate limit" in b.error
 
 
