@@ -7,6 +7,7 @@ approves, so another website cannot press Approve or Flatten for you.
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -207,6 +208,10 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/ob/board")
     def ob_board():
         return _json(dict(engine.obboard.view(), paper=engine.board_paper()))
+
+    @app.get("/api/ob/live")
+    def ob_live(sym: Optional[str] = None, after: int = 0):
+        return _json(engine.obboard.live_view(sym, after))
 
     @app.get("/api/ob/stock/{symbol}")
     def ob_stock(symbol: str):
