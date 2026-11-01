@@ -76,6 +76,16 @@ class FeedManager:
         # today's bars so far, and the previous close
         threading.Thread(target=self._backfill, args=(new,), daemon=True).start()
 
+    def subscribe_fo(self, contracts: Dict[str, str], on_oi) -> int:
+        """Stream futures contracts' open interest (token -> trading symbol, nearest expiry first) to on_oi(token,
+        oi, ts). Angel One only; returns how many contracts are streamed (the rest are read every few minutes)."""
+        md = self.adapter.market_data if (self.mode == "angel" and self.adapter) else None
+        if md is None:
+            return 0
+        md.on_oi = on_oi
+        md.subscribe_fo(contracts)
+        return len(md.fo_tokens)
+
     # ---------------------------------------------------------------- angel
     def _on_angel_quote(self, symbol, ltp, ts, cum_volume, prev_close):
         self.state.on_price(symbol, ltp, ts, cum_volume, build_bars=True)

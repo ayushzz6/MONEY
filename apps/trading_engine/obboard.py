@@ -4,7 +4,9 @@ plus the confirmation checks: futures and options OI, live OI, CPR, volume, prev
 
 Live during the session from the engine's 5-minute bars (the F&O stocks are subscribed to the feed); at other
 times it shows the last session, rebuilt from cached 5-minute history. It runs on its own thread so a long
-morning scan never delays it.
+morning scan never delays it. Ranks, zones and alignment move with finished candles (each minute); live_view()
+re-reads every board stock's price, live OI and price-based confirmations whenever it is asked, at most once a
+second. Angel One's OI readings (futures, the leaders' options, its build-up lists) run on a second thread.
 """
 import datetime as dt
 import logging
@@ -34,6 +36,9 @@ class OrderBlockBoard:
         self._last = 0.0
         self.error = ""
         self.live_oi = fno.LiveOI()
+        self.live_opt = fno.LiveOptions()
+        self.buildups = fno.BuildUpLists()
+        self._live: Optional[Dict] = None
         self._vol_prof: Dict[str, Optional[List[float]]] = {}
         self._days5m: Dict[str, Dict[str, DailyBar]] = {}
         self._hist_session = None
@@ -49,10 +54,16 @@ class OrderBlockBoard:
         return [s for s in syms if self.e.universe.token(s)]
 
     def subscribe(self):
-        """Live bars for every F&O stock (called when the day is prepared)."""
+        """Live bars for every F&O stock, and their futures' open interest on the websocket, nearest expiry first
+        (called when the day is prepared)."""
         syms = self.symbols()
         if syms:
             self.e.feed.subscribe(syms)
+            today = cal.now_ist().date().isoformat()
+            cs = sorted((c["expiry"], str(c["token"]), c["symbol"]) for s in syms for c in self.e.universe.futures_for(s, today))
+            n = self.e.feed.subscribe_fo({t: sym for _, t, sym in cs}, self.live_oi.on_stream)
+            if n:
+                logger.info("futures OI on the websocket: %d of %d contracts", n, len(cs))
         return len(syms)
 
     def _daily_context(self, daily_bars, session: str):
@@ -132,9 +143,16 @@ class OrderBlockBoard:
         return {"last": r["last"], "change_pct": r["change_pct"], "fut_buildup": r["oi_buildup"], "fut_oi_chg": oi.get("chg_pct"),
                 "live_oi_chg": 100 * (live / oi["oi"] - 1) if live and oi.get("oi") else None,
                 "pe_chg": oi.get("pe_chg"), "ce_chg": oi.get("ce_chg"), "pcr": oi.get("pcr"), "live_pcr": self.live_oi.pcr.get(s),
+                **self._options_inputs(s),
                 "cpr": ctx["cpr"], "cpr_rank": ctx["cpr_rank"], "rvol": CF.rel_volume(bars, prof.get(s)),
                 "upto": cal.hhmm(last.close_minute), "prev_high": ctx["prev_high"], "prev_low": ctx["prev_low"],
                 "sma": ctx["sma"], "index_chg": idx_chg}
+
+    def _options_inputs(self, s) -> Dict:
+        o = self.live_opt.data.get(s) if self.live_opt.day == cal.now_ist().date().isoformat() else None
+        if not o or "ce_chg" not in o:
+            return {}
+        return {"opt_pe_chg": o["pe_chg"], "opt_ce_chg": o["ce_chg"], "opt_pcr": o.get("pcr"), "opt_expiry": o["expiry"]}
 
     def update_live_oi(self) -> Optional[str]:
         """Today's futures OI from Angel One, every few minutes in the session (used by the next refresh)."""
@@ -149,6 +167,37 @@ class OrderBlockBoard:
             self.live_oi.error = "no futures contracts in Angel One's scrip master"
             return self.live_oi.error
         return self.live_oi.refresh(api, contracts, base, today)
+
+    LEADERS = 10                                  # live options OI for the picks and the top 10 on each side
+
+    def update_live_options(self) -> Optional[str]:
+        """Today's options OI of the nearest expiry for the board's leaders, every few minutes in the session."""
+        api = self.e.adapter.smart_api if self.e.adapter else None
+        with self._lock:
+            b = self.board
+        if api is None or not self.fno or not b or not b.get("live") or not self.live_opt.due():
+            return None
+        today = cal.now_ist().date().isoformat()
+        leaders = [r["symbol"] for r in b.get("picks") or []] + \
+                  [r["symbol"] for side in ("bullish", "bearish") for r in (b.get(side) or [])[:self.LEADERS]]
+        chains = {}
+        for s in dict.fromkeys(leaders):
+            c = self.e.universe.options_for(s, today)
+            if c:
+                chains[s] = c
+        if not chains:
+            self.live_opt.error = "no stock options in Angel One's scrip master"
+            return self.live_opt.error
+        base = {s: (v.get("opt_exp") or {}) for s, v in (self.fno.get("oi") or {}).items()}
+        return self.live_opt.refresh(api, chains, base, today)
+
+    def update_buildups(self) -> Optional[str]:
+        """Angel One's OI build-up lists (near-month futures), every few minutes in the session."""
+        api = self.e.adapter.smart_api if self.e.adapter else None
+        if api is None or not self.buildups.due():
+            return None
+        owner = {c["symbol"]: s for s, cs in self.e.universe.futures.items() for c in cs}
+        return self.buildups.refresh(api, owner.get)
 
     # ------------------------------------------------------------ the board
     def refresh(self) -> str:
@@ -165,6 +214,7 @@ class OrderBlockBoard:
         prof = self._history(list(bars_by), session)
         idx_chg = self._index_change(session, live)
         live_oi = self.live_oi.oi if self.live_oi.day == session else {}
+        live_opt = self.live_opt.data if self.live_opt.day == session else {}
         rows, details = [], {}
         for s, bars in bars_by.items():
             ctx = self._daily_context(self._filled(s, daily.get(s) or []), session)
@@ -232,7 +282,12 @@ class OrderBlockBoard:
                  "picks": ranked["bullish_picks"] + ranked["bearish_picks"],
                  "confirm_rules": [{"key": k, "label": lab, "rule": rule} for k, lab, rule in CF.RULES],
                  "index_chg": round(idx_chg, 2) if idx_chg is not None else None,
-                 "live_oi": {"stocks": len(live_oi), "at": self.live_oi.at if live_oi else None, "error": self.live_oi.error},
+                 "live_oi": {"stocks": len(live_oi), "at": self.live_oi.at if live_oi else None, "error": self.live_oi.error,
+                             "streamed": len(self.live_oi.stream) if self.live_oi.stream_ok else 0,
+                             "stream_at": self.live_oi.stream_at if self.live_oi.stream_ok else None},
+                 "live_opt": {"stocks": len(live_opt), "at": self.live_opt.at if live_opt else None, "error": self.live_opt.error,
+                              "rows": {s: {k: (round(v, 2) if isinstance(v, float) else v) for k, v in o.items()} for s, o in live_opt.items()}},
+                 "oi_lists": {"lists": self.buildups.lists, "at": self.buildups.at or None, "error": self.buildups.error},
                  "map": [{"symbol": r["symbol"], "sector": r["sector"], "change_pct": r["change_pct"], "side": r.get("side", 0),
                           "contender": r["symbol"] in contenders, "pick": bool(r.get("pick")), "event": r["event"],
                           "score": r["score"]} for r in rows],
@@ -269,9 +324,107 @@ class OrderBlockBoard:
                 "prev_close": round(d["ctx"]["prev_close"], 2), "prev_high": round(d["ctx"]["prev_high"], 2),
                 "prev_low": round(d["ctx"]["prev_low"], 2), "cpr": {k: round(v, 2) for k, v in d["ctx"]["cpr"].items()}}
 
+    # ------------------------------------------------------------ live, between the minute refreshes
+    LIVE_S = 0.8                                  # live_view() rebuilds its rows at most this often
+
+    def _index_live(self) -> Optional[float]:
+        """NIFTY 50 now (its last tick) against the session's open; None without a live price."""
+        sym = self.e.settings.get("market_filter.symbol", "^NSEI")
+        p, _ = self.e.state.price(sym)
+        bars = self.e.state.bars(sym)
+        first = bars[0] if bars else self.e.state.forming_bar(sym)
+        return 100 * (p / first.o - 1) if p and first and first.o else None
+
+    @staticmethod
+    def _rvol_now(volume: Optional[float], profile: Optional[List[float]], now) -> Optional[float]:
+        """Today's volume so far against the usual volume by this moment (inside the current candle, pro rata)."""
+        if not volume or not profile:
+            return None
+        mins = now.hour * 60 + now.minute + now.second / 60.0 - cal.OPEN_MIN
+        if mins <= 0:
+            return None
+        k = min(int(mins // cal.BAR_MINUTES), len(profile) - 1)
+        frac = 1.0 if k == len(profile) - 1 else (mins - k * cal.BAR_MINUTES) / cal.BAR_MINUTES
+        before = profile[k - 1] if k > 0 else 0.0
+        usual = before + (profile[k] - before) * frac
+        return volume / usual if usual > 0 else None
+
+    def _live_rows(self, b: Dict, details: Dict) -> Dict:
+        now_t = time.time()
+        out = {"at": now_t, "board_at": b["updated_at"], "live": b["live"], "rows": {}, "chg": {}}
+        if not b["live"]:
+            return out
+        now = cal.now_ist()
+        session = b["session"]
+        live_oi = self.live_oi.oi if self.live_oi.day == session else {}
+        idx = self._index_live()
+        if idx is None:
+            idx = b.get("index_chg")
+        syms = [m["symbol"] for m in b["map"]]
+        snap = self.e.state.snapshot(syms)
+        for s in syms:
+            p, d = (snap.get(s) or {}).get("ltp"), details.get(s)
+            if p and d:
+                out["chg"][s] = round(100 * (p / d["ctx"]["prev_close"] - 1), 2)
+        seen = set()
+        for r in (b.get("picks") or []) + (b.get("bullish") or []) + (b.get("bearish") or []):
+            s, side = r["symbol"], r.get("side", 0)
+            if s in seen or s not in details or s not in out["chg"]:
+                continue
+            seen.add(s)
+            d, q = details[s], snap[s]
+            row = dict(r, last=q["ltp"], change_pct=out["chg"][s])
+            x = self._confirm_inputs(row, d["ctx"], d["bars"], self._vol_prof, idx, live_oi)
+            rv = self._rvol_now(q.get("volume"), self._vol_prof.get(s), now)
+            if rv is not None:
+                x["rvol"], x["upto"] = rv, now.strftime("%H:%M:%S")
+            out["rows"][s] = {"last": round(q["ltp"], 2), "chg": out["chg"][s], "age": q.get("age_s"),
+                              "confirm": CF.evaluate(side, x) if side else None}
+        out["index_chg"] = round(idx, 2) if idx is not None else None
+        out["live_oi"] = {"stocks": len(live_oi), "streamed": len(self.live_oi.stream) if self.live_oi.stream_ok else 0,
+                          "stream_at": self.live_oi.stream_at if self.live_oi.stream_ok else None}
+        return out
+
+    def live_view(self, symbol: Optional[str] = None, after: int = 0) -> Dict:
+        """Every board stock's price and change, and the board's top 20 a side with their confirmations re-checked
+        on live prices; with `symbol`, its candles after `after` (epoch s) and the forming one, for its chart."""
+        with self._lock:
+            b, details = self.board, self.details
+        if not b:
+            return {"ready": False}
+        cached = self._live
+        if cached is None or time.time() - cached["at"] >= self.LIVE_S or cached["board_at"] != b["updated_at"]:
+            cached = self._live = self._live_rows(b, details)
+        out = dict(cached, ready=True)
+        if symbol and b["live"]:
+            symbol = symbol.upper()
+            bars = self.e.state.bars(symbol)
+            tail = [x.to_dict() for x in bars if x.start > after]
+            f = self.e.state.forming_bar(symbol)
+            if f and (not bars or f.start > bars[-1].start) and f.start > after:
+                tail.append(f.to_dict())
+            out["tail"] = {"symbol": symbol, "bars": tail, "forming": bool(f and tail and tail[-1]["t"] == f.start)}
+        return out
+
     # ------------------------------------------------------------ its own clock
     def start(self):
         threading.Thread(target=self._loop, name="orderblocks", daemon=True).start()
+        threading.Thread(target=self._oi_loop, name="angel-oi", daemon=True).start()
+
+    def _oi_loop(self):
+        """Angel One's OI readings, each when due (every few minutes) in the session; the build-up lists once at
+        other times too, so the page shows the last session's."""
+        while True:
+            open_ = cal.session_state(cal.now_ist()) == "OPEN"
+            for name, fn, always in (("live futures OI", self.update_live_oi, False), ("live options OI", self.update_live_options, False),
+                                     ("OI build-up lists", self.update_buildups, True)):
+                if not (open_ or (always and not self.buildups.at)):
+                    continue
+                try:
+                    fn()
+                except Exception as e:                   # live OI is an extra: never fail the board
+                    logger.warning("%s failed: %s", name, e)
+            time.sleep(1.0)
 
     def _loop(self):
         while True:
@@ -285,12 +438,6 @@ class OrderBlockBoard:
                     self.e.jobs["order_blocks"] = {"state": "running", "started_at": time.time(), "message": ""}
                     msg = self.refresh()
                     self.e.jobs["order_blocks"].update(state="done" if not self.error else "failed", finished_at=time.time(), message=msg)
-                    if open_:
-                        try:
-                            self.update_live_oi()
-                        except Exception as e:           # live OI is an extra: never fail the board
-                            logger.warning("live futures OI failed: %s", e)
-                            self.live_oi.error = str(e)
             except Exception as e:
                 logger.exception("order-block board failed")
                 self.error = str(e)
