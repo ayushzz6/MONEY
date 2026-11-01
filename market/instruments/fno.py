@@ -272,7 +272,9 @@ def _f(x) -> Optional[float]:
 
 class BuildUpLists:
     """Angel One's own lists (its OI build-up API) of the near-month stock futures with the biggest long build-up,
-    short build-up, short covering and long unwinding, every EVERY_S seconds."""
+    short build-up, short covering and long unwinding, every EVERY_S seconds. The API gives OI and its change in
+    thousands of shares (checked against NSE's bhavcopy: about 1/1,000 of it, the change % matching); kept in shares,
+    with the change as a % of the previous OI."""
     EVERY_S = 180
     TOP = 10
 
@@ -301,9 +303,12 @@ class BuildUpLists:
             for x in (r.get("data") or [])[:self.TOP]:
                 ts = str(x.get("tradingSymbol") or "")
                 m = _CONTRACT.match(ts)
+                oi, chg = _f(x.get("opnInterest")), _f(x.get("netChangeOpnInterest"))
+                prev = oi - chg if oi is not None and chg is not None else None
                 rows.append({"symbol": owner(ts) or (m.group(1) if m else ts), "contract": ts, "ltp": _f(x.get("ltp")),
-                             "chg_pct": _f(x.get("percentChange")), "oi": _f(x.get("opnInterest")),
-                             "oi_chg": _f(x.get("netChangeOpnInterest"))})
+                             "chg_pct": _f(x.get("percentChange")), "oi": oi * 1000 if oi is not None else None,
+                             "oi_chg": chg * 1000 if chg is not None else None,
+                             "oi_chg_pct": round(100 * chg / prev, 2) if prev else None})
             lists[name] = rows
             time.sleep(1.1)
         if lists:

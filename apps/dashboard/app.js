@@ -1265,7 +1265,7 @@
     return `<div class="card flush">${head}<div class="oi-lists">${BUILDS.map(([k, cls, what]) => `<div><h3><span class="${cls}">${esc(k)}</span> <span class="muted small">${what}</span></h3>
       ${(L[k] || []).length ? `<table class="ob-table"><tbody>${L[k].map((x) => `<tr${onBoard.has(x.symbol) ? ` class="clickable" data-ob="${esc(x.symbol)}" tabindex="0"` : ""}>
         <td><b>${esc(x.symbol)}</b>${onBoard.has(x.symbol) ? `<span class="name">on the board</span>` : ""}</td><td class="r ${pnlClass(x.chg_pct)}">${pct(x.chg_pct, 2)}</td>
-        <td class="r num" title="open interest and its change">${qty(x.oi)}<span class="name">${x.oi_chg == null ? "–" : (x.oi_chg > 0 ? "+" : "") + qty(x.oi_chg)}</span></td></tr>`).join("")}</tbody></table>`
+        <td class="r num" title="near-month futures open interest (shares) and its change">OI ${qty(x.oi)}<span class="name ${pnlClass(x.oi_chg_pct)}">${x.oi_chg_pct == null ? "–" : pct(x.oi_chg_pct, 1)}</span></td></tr>`).join("")}</tbody></table>`
         : `<p class="empty">none</p>`}</div>`).join("")}</div>${b.error ? `<p class="note" style="padding:0 16px 12px">${esc(b.error)}</p>` : ""}</div>`;
   }
   function drawOBSectors() {
