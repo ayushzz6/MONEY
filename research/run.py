@@ -144,7 +144,7 @@ def print_table(doc):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["download", "download500", "run", "search", "equity", "equity3", "validate3", "library", "library2", "library3", "lead", "options", "library6", "srbreak", "obtest"])
+    ap.add_argument("cmd", choices=["download", "download500", "run", "search", "equity", "equity3", "validate3", "library", "library2", "library3", "lead", "options", "library6", "srbreak", "obtest", "obstrats"])
     ap.add_argument("--only", help="comma-separated codes, e.g. E1,O1")
     ap.add_argument("--report", action="store_true", help="search: rebuild the report from the saved grids")
     ap.add_argument("--universe", default="nifty200", choices=["nifty200", "nifty500"], help="equity3: stock universe")
@@ -180,6 +180,13 @@ def main(argv=None):
         if not a.report:
             obtest.build(log=log)
         log(f"Report: {report_ob.write(obtest.analyze(log=log))}")
+        return 0
+    if a.cmd == "obstrats":
+        from research.lib import obstrats
+        log = lambda m: print(m, flush=True)
+        if not a.report:
+            obstrats.build(log=log)
+        obstrats.analyze(log=log)
         return 0
     if a.cmd == "srbreak":
         from research.lib import report_sr, srbreak
