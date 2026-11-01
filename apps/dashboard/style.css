@@ -397,11 +397,6 @@ td .name { display: block; color: var(--muted); font-size: 11.5px; max-width: 22
 .cf-mark.on { color: var(--good-text); }
 .cf-mark.off { color: var(--bad-text); opacity: .75; }
 .cf-mark.na { color: var(--muted); }
-.oi-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 18px; padding: 0 16px 12px; }
-.oi-lists > div { min-width: 0; }
-.oi-lists h3 { font-size: 13px; margin: 10px 0 4px; text-transform: capitalize; }
-.oi-lists h3 .muted { text-transform: none; }
-.oi-lists .ob-table td { padding: 5px 6px; }
 /* P&L calendar */
 .cal { display: grid; grid-auto-flow: column; grid-template-rows: repeat(5, 16px); gap: 3px; overflow-x: auto; padding-bottom: 4px; }
 .cal i { width: 16px; height: 16px; border-radius: 3px; background: var(--surface-3); display: block; }

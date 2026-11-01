@@ -11,8 +11,6 @@ All rules are published here; none of them is backtested (research/lib/obtest.py
     options     the bhavcopy's options OI change: more put OI added than call OI (put writing, bullish), or more call
                 OI than put OI (call writing, bearish). PCR = put OI / call OI over every expiry, shown, not scored;
                 Angel One's live PCR (near expiry only) is shown beside it.
-    live_opt    today's options OI of the nearest expiry (Angel One, for the board's leaders, every few minutes) against
-                the same expiry in the bhavcopy: more put OI added than call OI (bullish), or the reverse (bearish).
     narrow_cpr  today's central pivot range from the previous session's high, low and close:
                 pivot = (H + L + C) / 3, BC = (H + L) / 2, TC = 2 x pivot - BC, width = |TC - BC| / pivot.
                 Narrow = narrower than at least CPR_NARROW of the stock's last CPR_DAYS CPRs (a trending day is likelier).
@@ -38,7 +36,6 @@ RULES = [
     ("futures", "Futures OI", "futures OI build-up on the stock's side in the latest NSE bhavcopy (long build-up for bulls, short build-up for bears)"),
     ("live_oi", "OI today", f"futures OI up at least {LIVE_OI_MIN:g}% since the bhavcopy, with today's price moving the stock's way (Angel One, every few minutes)"),
     ("options", "Options OI", "more put OI written than call OI (bulls), or more call OI than put OI (bears), in the latest bhavcopy"),
-    ("live_opt", "Options today", "more put OI added than call OI today (bulls), or the reverse (bears), in the nearest expiry (Angel One, the board's leaders, every few minutes)"),
     ("narrow_cpr", "Narrow CPR", f"today's central pivot range narrower than {round(100 * CPR_NARROW)}% of the stock's last {CPR_DAYS}"),
     ("cpr_side", "vs CPR", "price above the CPR's top (bulls) or below its bottom (bears)"),
     ("volume", "Volume", f"today's volume at least {VOL_MIN:g}x the average of the last {VOL_DAYS} sessions by the same time"),
@@ -101,9 +98,8 @@ def _qty(x: float) -> str:
 
 
 def evaluate(side: int, x: Dict) -> Dict:
-    """x: last, change_pct, fut_buildup, fut_oi_chg, live_oi_chg, pe_chg, ce_chg, pcr, live_pcr, opt_pe_chg,
-    opt_ce_chg, opt_pcr, opt_expiry, cpr, cpr_rank, rvol, upto (HH:MM), prev_high, prev_low, sma, index_chg.
-    Missing keys mean no data.
+    """x: last, change_pct, fut_buildup, fut_oi_chg, live_oi_chg, pe_chg, ce_chg, pcr, live_pcr, cpr, cpr_rank,
+    rvol, upto (HH:MM), prev_high, prev_low, sma, index_chg. Missing keys mean no data.
     Returns {"checks": {key: {"ok", "v" (short value), "text"}}, "score", "of"}."""
     out: Dict[str, Dict] = {}
     last = x.get("last")
@@ -135,15 +131,6 @@ def evaluate(side: int, x: Dict) -> Dict:
         put("options", (pe > ce) if bull else (ce > pe), f"PCR {pcr:.2f}" if pcr is not None else "–", txt)
     else:
         put("options", None)
-
-    pe, ce = x.get("opt_pe_chg"), x.get("opt_ce_chg")
-    if pe is not None and ce is not None and (pe or ce):
-        pcr = x.get("opt_pcr")
-        txt = f"put OI {_qty(pe)}, call OI {_qty(ce)} since yesterday" + (f" · PCR {pcr:.2f}" if pcr is not None else "") + \
-              (f" · expiry {x['opt_expiry']}" if x.get("opt_expiry") else "")
-        put("live_opt", (pe > ce) if bull else (ce > pe), f"PCR {pcr:.2f}" if pcr is not None else "–", txt)
-    else:
-        put("live_opt", None, text="read for the board's leaders only, every few minutes in the session")
 
     c, rank = x.get("cpr"), x.get("cpr_rank")
     if c and rank is not None:

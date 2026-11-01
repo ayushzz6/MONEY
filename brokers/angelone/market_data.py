@@ -1,16 +1,13 @@
-"""Angel One SmartAPI WebSocket V2 feed: stocks in QUOTE mode (LTP, day volume, previous close) and stock
-futures in SNAP_QUOTE mode (open interest), on one socket.
+"""Angel One SmartAPI WebSocket V2 feed (QUOTE mode: LTP, day volume, previous close).
 
 The socket runs in its own daemon thread (SmartWebSocketV2.connect() blocks). Tokens are
 subscribed when the socket opens, and again whenever new ones are added.
 
-Three SmartApi quirks are handled here:
+Two SmartApi quirks are handled here:
 - its _on_close takes (wsapp) but websocket-client calls it with (wsapp, code, reason), so the
   close raised inside the SDK and never reached us: the feed looked connected after it died;
 - its retry counter never resets, so after a few drops over the socket's life it gives up for
-  good. reconnect() opens a brand-new socket (FeedManager calls it, after a fresh login);
-- its list of subscribed tokens is a class attribute, shared by every socket: each reconnect added
-  every token to it again. Each socket gets its own list.
+  good. reconnect() opens a brand-new socket (FeedManager calls it, after a fresh login).
 """
 import logging
 import threading
@@ -21,14 +18,11 @@ from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 
 logger = logging.getLogger(__name__)
 
-QUOTE_MODE, SNAP_QUOTE_MODE = 2, 3
-NSE_CM, NSE_FO = 1, 2
-MAX_TOKENS = 950                        # Angel One allows 1,000 subscriptions a connection: keep a margin
+QUOTE_MODE = 2
+NSE_CM = 1
 
 # on_quote(symbol, ltp, ts_seconds, cum_volume, prev_close)
 QuoteCallback = Callable[[str, float, float, Optional[float], Optional[float]], None]
-# on_oi(contract_token, open_interest, ts_seconds)
-OICallback = Callable[[str, float, float], None]
 
 
 class AngelOneMarketData:
@@ -36,9 +30,7 @@ class AngelOneMarketData:
         self.api_key = api_key
         self.client_code = client_code
         self.on_quote: Optional[QuoteCallback] = None
-        self.on_oi: Optional[OICallback] = None
         self.token_to_symbol: Dict[str, str] = {}
-        self.fo_tokens: Dict[str, str] = {}     # futures contract token -> its trading symbol
         self.connected = False
         self.gave_up = False                    # the SDK ran out of retries on this socket
         self.last_message_at: Optional[float] = None
@@ -53,7 +45,6 @@ class AngelOneMarketData:
     def _socket(self, auth_token: str, feed_token: str) -> SmartWebSocketV2:
         sws = SmartWebSocketV2(auth_token, self.api_key, self.client_code, feed_token,
                                max_retry_attempt=5, retry_strategy=1, retry_delay=5)
-        sws.input_request_dict = {}             # the SDK's is shared by every socket (a class attribute)
         gen = self._gen
 
         def live():
@@ -75,11 +66,6 @@ class AngelOneMarketData:
         try:
             self.last_message_at = time.time()
             token = str(msg.get("token", "")).strip("\x00")
-            if msg.get("exchange_type") == NSE_FO:
-                if token in self.fo_tokens and self.on_oi and msg.get("open_interest") is not None:
-                    ts = (msg.get("exchange_timestamp") or time.time() * 1000) / 1000.0
-                    self.on_oi(token, float(msg["open_interest"]), ts)
-                return
             sym = self.token_to_symbol.get(token)
             if not sym or "last_traded_price" not in msg:
                 return
@@ -98,7 +84,6 @@ class AngelOneMarketData:
         self.opened_at = time.time()
         logger.info("Angel One WebSocket open")
         self._subscribe(list(self.token_to_symbol))
-        self._subscribe(list(self.fo_tokens), SNAP_QUOTE_MODE, NSE_FO)
 
     def _on_error(self, *args):
         logger.error(f"WebSocket error: {args}")
@@ -154,24 +139,13 @@ class AngelOneMarketData:
         if self.connected and new:
             self._subscribe(new)
 
-    def subscribe_fo(self, contracts: Dict[str, str]) -> int:
-        """Futures contracts (token -> trading symbol) for their open interest, in the order given (nearest
-        expiry first), as many as fit beside the stocks. Returns how many are streamed."""
-        room = max(0, MAX_TOKENS - len(self.token_to_symbol) - len(self.fo_tokens))
-        new = {t: s for t, s in contracts.items() if t and t not in self.fo_tokens}
-        new = dict(list(new.items())[:room])
-        self.fo_tokens.update(new)
-        if self.connected and new:
-            self._subscribe(list(new), SNAP_QUOTE_MODE, NSE_FO)
-        return len(new)
-
-    def _subscribe(self, tokens: Iterable[str], mode: int = QUOTE_MODE, exchange: int = NSE_CM):
+    def _subscribe(self, tokens: Iterable[str]):
         tokens = list(tokens)
         if not tokens:
             return
         try:
-            self.sws.subscribe("moneyv2", mode, [{"exchangeType": exchange, "tokens": tokens}])
-            logger.info(f"Subscribed {len(tokens)} {'futures (open interest)' if exchange == NSE_FO else 'stock'} tokens")
+            self.sws.subscribe("moneyv2", QUOTE_MODE, [{"exchangeType": NSE_CM, "tokens": tokens}])
+            logger.info(f"Subscribed {len(tokens)} tokens")
         except Exception as e:
             logger.error(f"Subscribe failed: {e}")
 

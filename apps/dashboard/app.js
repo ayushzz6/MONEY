@@ -1077,10 +1077,7 @@
   // ------------------------------------------------------------------ order-block board
   let ob = null, obAt = 0, obTab = store.get("mv2.obtab", "board"), obSel = store.get("mv2.obsym", null);
   let obDetail = null, obDetailAt = 0;
-  let obChart = null, obCandles = null, obVwap = null, obSeries = [], obLines = [], obChartSym = null, obChartLastT = 0;
-  // live: every second, prices, live OI and the price-based confirmations; ranks, zones and alignment move each minute
-  let obLive = null;
-  const obFl = {}, obPrevPx = {};          // a price cell flashes when the price changes
+  let obChart = null, obCandles = null, obVwap = null, obSeries = [], obLines = [];
   const obOpen = () => ((S && S.clock) || {}).state === "OPEN";
   const obStale = () => Date.now() - obAt > (obOpen() ? 15000 : 120000);
   const sideCls = (s) => (s > 0 ? "side-bull" : s < 0 ? "side-bear" : "muted");
@@ -1111,57 +1108,11 @@
     if (entering || obStale()) loadOB().then(() => { if (page === "ob") drawOB(); });
   }
   function obRows() { return ob && ob.ready ? [...(ob.bullish || []), ...(ob.bearish || [])] : []; }
-  const obLastT = () => { const b = obDetail && obDetail.bars; return b && b.length ? b[b.length - 1].t : 0; };
-  function obMerge() {
-    const L = obLive;
-    if (!L || !L.ready || !ob || !ob.ready || L.board_at !== ob.updated_at) return false;
-    const seen = new Set();
-    for (const r of [...(ob.picks || []), ...obRows()]) {
-      const x = L.rows[r.symbol];
-      if (!x) continue;
-      r.live_last = x.last; r.change_pct = x.chg;
-      if (x.confirm) r.confirm = x.confirm;
-      if (seen.has(r.symbol)) continue;
-      seen.add(r.symbol);
-      const was = obPrevPx[r.symbol];
-      obFl[r.symbol] = was == null || x.last === was ? "" : x.last > was ? "flash-up" : "flash-down";
-      obPrevPx[r.symbol] = x.last;
-    }
-    for (const p of ob.map || []) if (L.chg[p.symbol] != null) p.change_pct = L.chg[p.symbol];
-    if (L.index_chg != null) ob.index_chg = L.index_chg;
-    if (L.live_oi) ob.live_oi = Object.assign({}, ob.live_oi, L.live_oi);
-    return true;
-  }
-  function obTick() {
-    if (page !== "ob" || document.hidden || !ob || !ob.ready || !ob.live) return;
-    const d = obDetail, q = d && !d.error && d.symbol === obSel ? `?sym=${encodeURIComponent(obSel)}&after=${obLastT()}` : "";
-    once("obl", async () => {
-      try { obLive = await api("/api/ob/live" + q); } catch (e) { return; }
-      if (!obLive.ready || page !== "ob") return;
-      if (obLive.board_at !== ob.updated_at) {               // a new minute's board: ranks, zones and candles
-        await loadOB();
-        obMerge();
-        drawOB(true);
-        loadOBDetail(obSel, true);
-        return;
-      }
-      if (obMerge()) drawOB(true);
-    });
-  }
-  setInterval(obTick, 1000);
-  // redraw a container without losing its tables' sideways scroll or the focused row
-  function keepPlace(el, draw) {
-    const xs = [...el.querySelectorAll(".table-wrap")].map((w) => w.scrollLeft);
-    const f = document.activeElement && el.contains(document.activeElement) ? document.activeElement.dataset.ob : null;
-    draw();
-    el.querySelectorAll(".table-wrap").forEach((w, i) => { if (xs[i]) w.scrollLeft = xs[i]; });
-    if (f) { const n = el.querySelector(`[data-ob="${CSS.escape(f)}"]`); if (n) n.focus({ preventScroll: true }); }
-  }
-  function drawOB(fromTick) {
+  function drawOB() {
     const head = $("#ob-head");
     if (!ob) { head.innerHTML = `<div class="card"><p class="empty">Loading the board…</p></div>`; return; }
     if (!ob.ready) { head.innerHTML = `<div class="card"><p class="empty">${esc(ob.error || "The board is being built.")}</p></div>`; $("#ob-board").innerHTML = ""; return; }
-    const sess = ob.live ? `<span class="chip good">Live</span> prices every second · ranks and zones ${fmtIST(ob.updated_at)}` : `<span class="chip">Last session</span> ${esc(fmtDay(ob.session))} close`;
+    const sess = ob.live ? `<span class="chip good">Live</span> updated ${fmtIST(ob.updated_at)}` : `<span class="chip">Last session</span> ${esc(fmtDay(ob.session))} close`;
     const tot = Math.max(1, ob.up + ob.down);
     head.innerHTML = `<div class="card"><div class="ob-status">
         <div>${sess} · ${ob.stocks} F&amp;O stocks${ob.fno_date ? ` · OI as of ${esc(fmtDay(ob.fno_date))}` : ""}</div>
@@ -1174,17 +1125,17 @@
       const first = (ob.picks || [])[0] || obRows()[0];
       obSel = first ? first.symbol : null;
     }
-    const draw = { board: drawOBBoard, confirm: drawOBConfirm, map: drawOBMap, sectors: drawOBSectors }[obTab];
-    if (draw) keepPlace($("#ob-" + obTab), draw);
-    if (fromTick) { obDetailLive(); for (const k in obFl) obFl[k] = ""; }
-    else loadOBDetail(obSel, false);
+    if (obTab === "board") drawOBBoard();
+    if (obTab === "confirm") drawOBConfirm();
+    if (obTab === "map") drawOBMap();
+    if (obTab === "sectors") drawOBSectors();
+    loadOBDetail(obSel, false);
   }
-  const obPx = (r) => `<span class="num ${obFl[r.symbol] || ""}">₹${px(r.live_last != null ? r.live_last : r.last)}</span>`;
   function pickCard(r) {
     const z = r.zone;
     return `<div class="pick ${r.symbol === obSel ? "selected" : ""}" data-ob="${esc(r.symbol)}" tabindex="0">
       <div class="top"><b>${esc(r.symbol)}</b><span class="grow"></span><span class="${pnlClass(r.change_pct)} num">${pct(r.change_pct, 2)}</span></div>
-      <div class="small"><span class="${sideCls(r.side)}">${sideWord(r.side)}</span> · ${obPx(r)}</div>
+      <div class="small"><span class="${sideCls(r.side)}">${sideWord(r.side)}</span></div>
       <div class="muted small">${esc(r.sector)} · #${r.rank} · ${r.aligned}/4 aligned${r.confirm ? ` · ${r.confirm.score}/${r.confirm.of} confirmed` : ""}</div>
       <div class="lv">${z ? `<span>${r.side < 0 ? "Sell zone" : "Buy zone"}</span><span>${px(z.bottom)} – ${px(z.top)} (${esc(z.status)})</span>
         <span>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</span><span><b>${px(z.z)}</b> · given ${zGiven(z)}</span>
@@ -1207,7 +1158,7 @@
       const rule = r.rule === "pick" ? `<span class="chip good">Pick</span>` : r.event ? `<span class="chip warn">Event risk</span>` : `<span class="muted small">${esc((r.rule || "").replace("not picked · ", ""))}</span>`;
       return `<tr class="clickable ${r.symbol === obSel ? "selected" : ""} ${r.new_top10 ? "top10" : ""}" data-ob="${esc(r.symbol)}" tabindex="0">
         <td class="num">${r.rank}${d}</td><td><b>${esc(r.symbol)}</b><span class="name">${esc(r.sector)}${r.oi_buildup ? " · OI: " + esc(r.oi_buildup) : ""}</span></td>
-        <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}<span class="name">${obPx(r)}</span></td>
+        <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}</td>
         <td class="num"><span class="sbar" style="width:${(42 * Math.abs(r.score) / mx).toFixed(0)}px;background:${side > 0 ? "var(--up)" : "var(--down)"}"></span>${(r.score || 0).toFixed(2)}<span class="name">p${r.pctile} · straight ${Math.round(100 * (r.clean || 0))}%</span></td>
         <td>${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${px(z.z)} · ${rr(z)}</span><span class="name num">SL <span class="neg">${px(z.invalid)}</span> · T <span class="pos">${px(zTarget(z))}</span></span><span class="name num">${zWhen(z)}</span>` : `<span class="muted small">${r.event ? "no levels" : "none yet"}</span>`}</td>
         <td>${rule}<span class="name">${alignDots(r)} ${r.aligned}/4</span></td></tr>`;
@@ -1231,7 +1182,7 @@
         const c = r.confirm, z = r.zone, zc = z ? ZCHIP[z.status] : null;
         return `<tr class="clickable ${r.symbol === obSel ? "selected" : ""}" data-ob="${esc(r.symbol)}" tabindex="0">
           <td><b>${esc(r.symbol)}</b><span class="name">#${r.rank} · ${esc(r.sector)}</span></td>
-          <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}<span class="name">${obPx(r)}</span></td>
+          <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}</td>
           <td class="num"><span class="sbar" style="width:${(42 * c.score / Math.max(1, rules.length)).toFixed(0)}px;background:${side > 0 ? "var(--up)" : "var(--down)"}"></span>${c.score}/${c.of}</td>
           ${rules.map((x) => { const k = c.checks[x.key]; return `<td class="cf" title="${esc(x.label + ": " + ((k && k.text) || "no data"))}">${cfMark(k)}<span class="name num">${esc((k && k.v) || "–")}</span></td>`; }).join("")}
           <td>${alignDots(r)} <span class="small">${r.aligned}/4</span>${r.rule === "pick" ? ` <span class="chip good">Pick</span>` : ""}</td>
@@ -1239,34 +1190,16 @@
       }).join("")}</tbody></table></div>`;
   }
   function drawOBConfirm() {
-    const lo = ob.live_oi || {}, lp = ob.live_opt || {};
-    const oi = lo.streamed && lo.stream_at ? `Live futures OI: ${lo.stocks} stocks from Angel One · ${lo.streamed} contracts streaming (last change ${fmtIST(lo.stream_at)}), the rest every 3 minutes`
-      : lo.at ? `Live futures OI: ${lo.stocks} stocks from Angel One, read ${fmtIST(lo.at)}`
+    const lo = ob.live_oi || {};
+    const oi = lo.at ? `Live futures OI: ${lo.stocks} stocks from Angel One, read ${fmtIST(lo.at)}`
       : `Live futures OI: ${lo.error ? esc(lo.error) : ob.live ? "first reading within a few minutes" : "only during the session"}`;
-    const op = lp.at ? `Live options OI: ${lp.stocks} leaders, nearest expiry, read ${fmtIST(lp.at)} (every 3 minutes)`
-      : `Live options OI: ${lp.error ? esc(lp.error) : ob.live ? "first reading within a few minutes" : "only during the session"}`;
     $("#ob-confirm").innerHTML = `<div class="card"><div class="ob-status small">
-        <div>Futures and options OI: NSE bhavcopy ${ob.fno_date ? esc(fmtDay(ob.fno_date)) : "not available"}</div><div>${oi}</div><div>${op}</div>
+        <div>Futures and options OI: NSE bhavcopy ${ob.fno_date ? esc(fmtDay(ob.fno_date)) : "not available"}</div><div>${oi}</div>
         ${ob.index_chg != null ? `<div>NIFTY 50 <span class="${pnlClass(ob.index_chg)}">${pct(ob.index_chg, 2)}</span> from its open</div>` : ""}</div>
         <p class="note" style="margin:0">Each check asks whether that piece of evidence agrees with the stock's side on the board: ✓ agrees, ✗ disagrees, – no data (not counted).
-          ${ob.live ? "Prices, OI today, volume, CPR, previous day, trend and NIFTY are re-checked every second; options today every 3 minutes; yesterday's OI once a day. " : ""}Hover a column for its rule, a cell for its numbers. Sorted by confirmations, then board rank. These checks are not part of the picks and are not backtested.</p></div>
-      ${obBuildups()}
+          Hover a column for its rule, a cell for its numbers. Sorted by confirmations, then board rank. These checks are not part of the picks and are not backtested.</p></div>
       <div class="card flush"><div class="card-head"><h2 class="side-bull">Bullish confirmations</h2><span class="muted small">the bullish board's top 20</span></div>${cfTable(ob.bullish || [], 1)}</div>
       <div class="card flush"><div class="card-head"><h2 class="side-bear">Bearish confirmations</h2><span class="muted small">the bearish board's top 20</span></div>${cfTable(ob.bearish || [], -1)}</div>`;
-  }
-  const qty = (v) => { if (v == null || isNaN(v)) return "–"; const a = Math.abs(v); return (v < 0 ? "−" : "") + (a >= 1e7 ? (a / 1e7).toFixed(1) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(1) + " L" : a >= 1e3 ? (a / 1e3).toFixed(0) + "k" : a.toFixed(0)); };
-  const BUILDS = [["long build-up", "side-bull", "price up, OI up"], ["short covering", "side-bull", "price up, OI down"],
-    ["short build-up", "side-bear", "price down, OI up"], ["long unwinding", "side-bear", "price down, OI down"]];
-  function obBuildups() {
-    const b = ob.oi_lists || {}, L = b.lists || {};
-    const head = `<div class="card-head"><h2>OI build-up</h2><span class="muted small">Angel One's lists, near-month stock futures${b.at ? ` · read ${fmtIST(b.at)}` : ""}</span></div>`;
-    if (!Object.keys(L).length) return `<div class="card">${head}<p class="empty">${esc(b.error || (ob.live ? "The first lists come within a few minutes." : "Angel One's lists are read during the session."))}</p></div>`;
-    const onBoard = new Set(obRows().map((r) => r.symbol));
-    return `<div class="card flush">${head}<div class="oi-lists">${BUILDS.map(([k, cls, what]) => `<div><h3><span class="${cls}">${esc(k)}</span> <span class="muted small">${what}</span></h3>
-      ${(L[k] || []).length ? `<table class="ob-table"><tbody>${L[k].map((x) => `<tr${onBoard.has(x.symbol) ? ` class="clickable" data-ob="${esc(x.symbol)}" tabindex="0"` : ""}>
-        <td><b>${esc(x.symbol)}</b>${onBoard.has(x.symbol) ? `<span class="name">on the board</span>` : ""}</td><td class="r ${pnlClass(x.chg_pct)}">${pct(x.chg_pct, 2)}</td>
-        <td class="r num" title="open interest and its change">${qty(x.oi)}<span class="name">${x.oi_chg == null ? "–" : (x.oi_chg > 0 ? "+" : "") + qty(x.oi_chg)}</span></td></tr>`).join("")}</tbody></table>`
-        : `<p class="empty">none</p>`}</div>`).join("")}</div>${b.error ? `<p class="note" style="padding:0 16px 12px">${esc(b.error)}</p>` : ""}</div>`;
   }
   function drawOBSectors() {
     const rows = ob.sectors || [];
@@ -1347,11 +1280,10 @@
     if (!d || page !== "ob") return;
     $("#ob-title").textContent = d.error ? `${d.symbol}: ${d.error}` : `${d.symbol}${d.name && d.name !== d.symbol ? " · " + d.name : ""}`;
     if (d.error) { $("#ob-fields").innerHTML = ""; return; }
-    $("#ob-src").textContent = d.live ? "today, 5-minute candles · the last one live" : `last session ${fmtDay(d.session)}`;
+    $("#ob-src").textContent = d.live ? "today, finished 5-minute candles" : `last session ${fmtDay(d.session)}`;
     ensureOBChart();
     const r = d.row || {}, z = r.zone;
     if (obChart) {
-      obChartLastT = d.bars.length ? d.bars[d.bars.length - 1].t : 0;
       const T = (t) => t + IST_SHIFT, up = cssVar("--up"), down = cssVar("--down"), muted = cssVar("--muted");
       obChart.applyOptions(chartTheme());
       obCandles.applyOptions({ upColor: "rgba(0,0,0,0)", borderUpColor: up, wickUpColor: up, downColor: down, borderDownColor: down, wickDownColor: down, borderVisible: true });
@@ -1389,38 +1321,15 @@
       obCandles.setMarkers(marks);
       add(d.prev_close, muted, 1, "prev close");
       if (d.cpr) { add(d.cpr.tc, cssVar("--cpr"), 2, "CPR top"); add(d.cpr.bc, cssVar("--cpr"), 2, "CPR bottom"); }
-      if (obChartSym !== d.symbol) { obChart.timeScale().fitContent(); obChartSym = d.symbol; }
-      obChartTail();
+      obChart.timeScale().fitContent();
     }
-    drawOBFields();
-  }
-  // the candles that closed since the board's last refresh, and the forming one (from the live poll)
-  function obChartTail() {
-    const t = obLive && obLive.tail, d = obDetail;
-    if (!obChart || !t || !d || t.symbol !== d.symbol) return;
-    for (const b of t.bars) {
-      if (b.t < obChartLastT) continue;
-      try { obCandles.update({ time: b.t + IST_SHIFT, open: b.o, high: b.h, low: b.l, close: b.c }); obChartLastT = b.t; } catch (e) { /* older than the chart */ }
-    }
-  }
-  function obDetailLive() {
-    const d = obDetail;
-    if (!d || d.error || page !== "ob") return;
-    obChartTail();
-    drawOBFields();
-  }
-  function drawOBFields() {
-    const d = obDetail;
-    if (!d || d.error) return;
-    const r = obRows().find((x) => x.symbol === d.symbol) || d.row || {}, z = r.zone;
     const c = r.checks || {};
     const be = z && z.rr != null ? Math.round(100 / (1 + z.rr)) : null;
     $("#ob-fields").innerHTML = `<div class="ob-fields"><dl>
       <dt>Side</dt><dd class="${sideCls(r.side)}">${sideWord(r.side)}${r.side ? ` · #${r.rank} of ${r.of}` : ""}</dd>
       <dt>Rank</dt><dd>${r.pctile != null ? `p${r.pctile} (stronger than ${r.pctile}% of F&amp;O stocks)` : "–"}</dd>
       <dt>Rule</dt><dd>${r.rule === "pick" ? `<span class="chip good">Pick</span>` : esc(r.rule || "–")}</dd>
-      <dt>Price</dt><dd><b>₹${px(r.live_last != null ? r.live_last : r.last)}</b> · <span class="${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}</span>${r.live_last != null ? ` <span class="muted small">live</span>` : ""}</dd>
-      <dt>Strength</dt><dd>${r.move_atr != null ? r.move_atr.toFixed(2) + " ATR" : "–"} · straight ${Math.round(100 * (r.clean || 0))}% <span class="muted small">(finished candles)</span></dd>
+      <dt>Change</dt><dd class="${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)} · ${r.move_atr != null ? r.move_atr.toFixed(2) + " ATR" : "–"} · straight ${Math.round(100 * (r.clean || 0))}%</dd>
       <dt>Order block</dt><dd>${z ? `${px(z.bottom)} – ${px(z.top)} · ${esc(z.status)}${z.visits ? ` (${z.visits} visit${z.visits > 1 ? "s" : ""})` : ""}${z.strong ? " · strong push" : ""}` : (r.event ? "none: event risk" : "none yet")}</dd>
       <dt>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</dt><dd>${z ? `${px(z.z)} · given at ${zGiven(z)}, when the ${fmtIST(z.formed_at)} candle closed through the last swing ${z.side > 0 ? "high" : "low"}` : "–"}</dd>
       <dt>Entry signal</dt><dd>${!z ? "–" : zEntry(z) ? `price came back to Z in the ${zEntry(z)}–${fmtIST(z.entry_at + 300)} candle (a limit order at Z fills there)`

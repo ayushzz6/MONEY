@@ -137,15 +137,12 @@ def _fo_rows(day: dt.date):
     return rows
 
 
-def fo(day: dt.date, by_expiry: bool = False):
-    """{symbol: [fut_oi, fut_chg, near_close, ce_oi, pe_oi, ce_chg, pe_chg]}; with by_expiry, also
-    {symbol: {expiry: [ce_oi, pe_oi]}} for stock options (the base for today's live options OI)."""
+def fo(day: dt.date):
     rows = _fo_rows(day)
     if rows is None:
-        return (None, None) if by_expiry else None
+        return None
     fut = defaultdict(lambda: {"oi": 0.0, "chg": 0.0, "near": None})
     opt = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])          # ce_oi, pe_oi, ce_chg, pe_chg
-    per_exp = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))
     for kind, sym, exp, ot, close, oi, chg in rows:
         if kind in ("FUTSTK", "FUTIDX"):
             f = fut[sym]
@@ -161,15 +158,10 @@ def fo(day: dt.date, by_expiry: bool = False):
             elif ot == "PE":
                 o[1] += oi
                 o[3] += chg
-            if kind == "OPTSTK" and ot in ("CE", "PE"):
-                per_exp[sym][exp][0 if ot == "CE" else 1] += oi
     syms = set(fut) | set(opt)
-    out = {s: [fut[s]["oi"] if s in fut else None, fut[s]["chg"] if s in fut else None,
-               fut[s]["near"][1] if s in fut and fut[s]["near"] else None] + (opt[s] if s in opt else [None] * 4)
-           for s in syms}
-    if by_expiry:
-        return out, {s: dict(v) for s, v in per_exp.items()}
-    return out
+    return {s: [fut[s]["oi"] if s in fut else None, fut[s]["chg"] if s in fut else None,
+                fut[s]["near"][1] if s in fut and fut[s]["near"] else None] + (opt[s] if s in opt else [None] * 4)
+            for s in syms}
 
 
 def participants(day: dt.date):
