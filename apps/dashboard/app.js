@@ -125,6 +125,9 @@
     home: ["Home", "Everything that matters today, at a glance."],
     live: ["Live chart", "Prices, levels and trades for one stock. Click a stock in the watchlist to see it."],
     ob: ["Order blocks", "Every F&O stock ranked by clean one-way strength each minute, with its order-block zone, levels and market alignment."],
+    cx: ["Crypto & XAUUSD", "Live prices from Binance's websocket: the main coins and gold (XAUUSD), with a live chart."],
+    cxob: ["Crypto & XAUUSD: order blocks", "Coins ranked by clean one-way strength today, each with its order-block zone, entry, stop-loss and target. Gold on its own."],
+    cxcf: ["Crypto & XAUUSD: confirmations", "Does the rest of the evidence agree with each pair's side: futures OI, taker buying, volume, CPR, previous day, trend."],
     signals: ["Signals", "Every time a strategy's rule matched today, and what the bot did about it."],
     trades: ["Trades", "Open and closed trades, with profit or loss after all charges."],
     alerts: ["Alerts", "Price alerts you set, and a log of everything the bot did."],
@@ -232,6 +235,9 @@
       itab = b.dataset.itab; store.set("mv2.itab", itab); renderIntel(true);
     } else if (b && b.dataset.obtab) {
       obTab = b.dataset.obtab; store.set("mv2.obtab", obTab); renderOB(false); drawOB();
+    } else if (e.target.closest("[data-cx]") && !b) {
+      e.preventDefault();
+      cxSelect(e.target.closest("[data-cx]").dataset.cx);
     } else if (e.target.closest("[data-ob-go]")) {
       obSel = e.target.closest("[data-ob-go]").dataset.obGo; store.set("mv2.obsym", obSel); location.hash = "#ob";
     } else if (e.target.closest("[data-ob]") && !b) {
@@ -247,6 +253,8 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    const cxEl = e.target.closest && e.target.closest("[data-cx]");
+    if (cxEl && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cxSelect(cxEl.dataset.cx); return; }
     const obEl = e.target.closest && e.target.closest("[data-ob]");
     if (obEl && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); selectOB(obEl.dataset.ob); return; }
     const el = e.target.closest && e.target.closest("[data-sym]");
@@ -279,7 +287,7 @@
   function renderPage(entering) {
     if (!S) return;
     ({
-      home: renderHome, live: renderLive, ob: () => renderOB(entering), signals: renderSignals, trades: renderTrades, alerts: renderAlerts,
+      home: renderHome, live: renderLive, ob: () => renderOB(entering), cx: () => renderCX(entering), cxob: () => renderCX(entering), cxcf: () => renderCX(entering), signals: renderSignals, trades: renderTrades, alerts: renderAlerts,
       strategies: renderStrategies, research: renderResearch, intel: () => renderIntel(entering), skills: renderSkills,
       settings: renderSettings, help: renderHelp,
     })[page]();
@@ -1351,6 +1359,284 @@
       <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}</td><td class="r">${r.zone ? `${px(r.zone.z)}<span class="name">given ${zGiven(r.zone)}</span>` : "–"}</td>
       <td class="r neg">${r.zone ? px(r.zone.invalid) : "–"}</td><td class="r pos">${r.zone ? px(zTarget(r.zone)) : "–"}</td><td class="r">${rr(r.zone)}</td>
       <td class="r">${!r.zone ? "–" : zEntry(r.zone) || `<span class="muted">${ob.live ? "waiting" : "none"}</span>`}</td><td>${alignDots(r)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No picks passed the rules.</p>`;
+  }
+  // ------------------------------------------------------------------ crypto & XAUUSD (Binance)
+  let cx = null, cxAt = 0, cxSel = store.get("mv2.cxsym", "XAUUSDT"), cxD = null, cxDAt = 0;
+  const cxPrev = {};                     // the price last shown per pair: a cell flashes when it changes
+  const cxCharts = {};                   // "cx" (live prices) and "cxob" (order blocks) each keep a chart
+  // a pair's price decimals: its Binance tick size, else by the size of the price
+  const cdec = (v, s) => { const t = ((cx && cx.dec) || {})[s]; if (t != null) return Math.min(8, t); const a = Math.abs(v || 0); return a >= 100 ? 2 : a >= 1 ? 4 : a > 0 ? Math.min(8, Math.max(4, 3 - Math.floor(Math.log10(a)))) : 2; };
+  const cpx = (v, s) => (v == null || isNaN(v) ? "–" : new Intl.NumberFormat("en-US", { minimumFractionDigits: cdec(v, s), maximumFractionDigits: cdec(v, s) }).format(v));
+  const usd = (v) => (v == null ? "–" : "$" + (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(0) + "k" : v.toFixed(0)));
+  const cxShort = (s) => (s === "XAUUSDT" ? "XAUUSD" : String(s).replace(/USDT$/, ""));
+  const cxLive = (s) => ((cx && cx.live) || {})[s] || {};
+  const cxRows = () => (cx && cx.ready ? [...(cx.gold ? [cx.gold] : []), ...(cx.rows || [])] : []);
+  const cxRow = (s) => cxRows().find((r) => r.symbol === s);
+  const cxTargets = (z, s) => (z.targets.length ? z.targets.map((t, i) => `T${i + 1} ${cpx(t, s)}`).join(" · ") : `${cpx(zTarget(z), s)} (2R: no level ahead)`);
+  const CXALIGN = { rank: "in the top 5 on its side", btc: "Bitcoin moves the same way today", breadth: "most coins move the same way", vwap: "on the right side of today's VWAP" };
+  function cxDots(r) {
+    const c = r.checks || {}, keys = Object.keys(CXALIGN).filter((k) => k in c);
+    return `<span class="align" title="${esc(keys.map((k) => (c[k] == null ? "– " : c[k] ? "✓ " : "✗ ") + CXALIGN[k] + (c[k] == null ? " (not counted)" : "")).join("\n"))}">${keys.map((k) => `<i class="${c[k] ? "on" : ""}${c[k] == null ? " na" : ""}"></i>`).join("")}</span>`;
+  }
+  function cxSpark(pts) {
+    if (!pts || pts.length < 2) return "";
+    const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1, w = 200, h = 34;
+    const d = pts.map((v, i) => `${i ? "L" : "M"}${(i * w / (pts.length - 1)).toFixed(1)},${(h - 2 - (h - 4) * (v - lo) / span).toFixed(1)}`).join("");
+    return `<svg class="cx-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="${pts[pts.length - 1] >= pts[0] ? "var(--up)" : "var(--down)"}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+  function cxFlash() {
+    const out = {};
+    for (const [s, L] of Object.entries((cx && cx.live) || {})) {
+      const was = cxPrev[s];
+      out[s] = was == null || L.price === was ? "" : L.price > was ? "flash-up" : "flash-down";
+      cxPrev[s] = L.price;
+    }
+    return out;
+  }
+  function cxLoad() {
+    return once("cx", async () => {
+      try { cx = await api("/api/cx/board"); } catch (e) { cx = { ready: false, error: e.message }; }
+      cxAt = Date.now();
+    });
+  }
+  async function cxLoadDetail(force) {
+    if (!cxSel || (!force && cxD && cxD.symbol === cxSel && Date.now() - cxDAt < 1800)) return;
+    await once("cxd", async () => {
+      try { cxD = await api("/api/cx/stock/" + encodeURIComponent(cxSel)); } catch (e) { cxD = { symbol: cxSel, error: e.message }; }
+      cxDAt = Date.now();
+    });
+  }
+  function renderCX(entering) {
+    const which = page;
+    if (entering) drawCX(which);
+    if (entering || Date.now() - cxAt > 1500) cxLoad().then(() => { if (page === which) drawCX(which); });
+    if (which !== "cxcf") cxLoadDetail(entering).then(() => { if (page === which) drawCXDetail(which); });
+  }
+  function cxSelect(sym) {
+    cxSel = sym; store.set("mv2.cxsym", sym);
+    if (page === "cxcf") { location.hash = "#cxob"; return; }
+    $$("[data-cx]").forEach((el) => el.classList.toggle("selected", el.dataset.cx === sym));
+    cxLoadDetail(true).then(() => drawCXDetail(page));
+    const card = $(page === "cx" ? "#cx-chart-card" : "#cxob-detail-card");
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function cxHead(el) {
+    if (!cx) { el.innerHTML = `<div class="card"><p class="empty">Connecting to Binance…</p></div>`; return false; }
+    const st = (cx.streams || []).map((s) => {
+      const fresh = s.connected && s.last_msg && Date.now() / 1000 - s.last_msg < 30;
+      return `<span class="chip ${fresh ? "good" : "bad"}" title="${esc(s.error || "")}">${esc(s.name)}: ${fresh ? "live" : "reconnecting"}</span>`;
+    }).join(" ");
+    if (!cx.ready) { el.innerHTML = `<div class="card"><p class="empty">${esc(cx.error || "Loading candles from Binance…")}</p>${st ? `<div class="ob-status">${st}</div>` : ""}</div>`; return false; }
+    const tot = Math.max(1, cx.up + cx.down);
+    el.innerHTML = `<div class="card"><div class="ob-status">
+        <div>${st} <span class="muted small">Binance websocket · board updated ${fmtIST(cx.updated_at)} · today = ${esc(fmtDay(cx.day))}, UTC day from 05:30 IST</span></div>
+        <div class="breadth" title="Coins up and down since yesterday's close (UTC)"><span class="side-bull">${cx.up} up</span>
+          <div class="bar"><span style="width:${(100 * cx.up / tot).toFixed(1)}%;background:var(--up)"></span><span style="width:${(100 * cx.down / tot).toFixed(1)}%;background:var(--down)"></span></div>
+          <span class="side-bear">${cx.down} down</span></div>
+        ${cx.btc_chg != null ? `<div class="small">Bitcoin <span class="${pnlClass(cx.btc_chg)}">${pct(cx.btc_chg, 2)}</span> today</div>` : ""}
+      </div>${cx.error ? `<p class="note" style="margin:0">${esc(cx.error)}</p>` : ""}</div>`;
+    if (!cxRow(cxSel)) cxSel = (cx.gold || (cx.rows || [])[0] || {}).symbol || null;
+    return true;
+  }
+  function drawCX(which) {
+    const ok = cxHead($(`#${which}-head`));
+    if (which === "cx") drawCXLive(ok);
+    if (which === "cxob") drawCXBoard(ok);
+    if (which === "cxcf") drawCXConfirm(ok);
+  }
+  function cxSideCell(r) {
+    if (!r.side) return `<span class="muted small">${r.event ? "event risk" : "flat or choppy"}</span>`;
+    return `<span class="${sideCls(r.side)}">${sideWord(r.side)}</span> <span class="small num">${(r.score || 0).toFixed(2)}</span>` +
+      `<span class="name">${r.rank ? `#${r.rank} · ` : ""}${r.rule === "pick" ? "pick" : esc((r.rule || "").replace("not picked · ", ""))}</span>`;
+  }
+  // live prices
+  function drawCXLive(ok) {
+    $("#cx-note").innerHTML = `Prices and analytics only: the bot never trades crypto or gold. Crypto prices are Binance spot USDT pairs; XAUUSD is Binance's XAUUSDT perpetual,
+      which tracks spot gold in US dollars an ounce. For Indian residents: trading XAUUSD or other forex CFDs with offshore brokers is not permitted under FEMA (the RBI keeps
+      an alert list of such platforms); gold can be traded in India through MCX gold futures, gold ETFs or Sovereign Gold Bonds. Crypto gains in India are taxed at 30% with 1% TDS. Not investment advice.`;
+    if (!ok) { $("#cx-cards").innerHTML = ""; $("#cx-table").innerHTML = ""; return; }
+    const fl = cxFlash();
+    $("#cx-cards").innerHTML = ["XAUUSDT", "BTCUSDT", "ETHUSDT"].map((s) => {
+      const r = cxRow(s), L = cxLive(s);
+      if (!r) return "";
+      return `<div class="tile cx-tile ${s === cxSel ? "selected" : ""}" data-cx="${s}" tabindex="0">
+        <div class="label">${esc(r.name)} <span class="muted">· ${cxShort(s)}</span></div>
+        <div class="value num ${fl[s] || ""}">$${cpx(L.price, s)}</div>
+        <div class="sub"><span class="${pnlClass(L.chg_day)}">${pct(L.chg_day, 2)} today</span> · <span class="${pnlClass(L.chg24)}">${pct(L.chg24, 2)} 24h</span> · 24h range ${cpx(L.low24, s)} – ${cpx(L.high24, s)}</div>
+        ${cxSpark(r.spark)}</div>`;
+    }).join("");
+    $("#cx-table").innerHTML = `<div class="table-wrap"><table class="ob-table cx-table"><thead><tr><th>Pair</th><th class="r">Price (USD)</th><th class="r">Today</th><th class="r">24 hours</th>
+      <th class="r">24h low – high</th><th class="r">24h volume</th><th>Board</th><th>Zone</th></tr></thead><tbody>${cxRows().map((r) => {
+        const L = cxLive(r.symbol), z = r.zone, zc = z ? ZCHIP[z.status] : null;
+        return `<tr class="clickable ${r.symbol === cxSel ? "selected" : ""}" data-cx="${r.symbol}" tabindex="0">
+          <td><b>${cxShort(r.symbol)}</b><span class="name">${esc(r.name)} · ${esc(r.sector)}</span></td>
+          <td class="r num ${fl[r.symbol] || ""}"><b>${cpx(L.price, r.symbol)}</b></td><td class="r ${pnlClass(L.chg_day)}">${pct(L.chg_day, 2)}</td><td class="r ${pnlClass(L.chg24)}">${pct(L.chg24, 2)}</td>
+          <td class="r num small">${cpx(L.low24, r.symbol)} – ${cpx(L.high24, r.symbol)}</td><td class="r">${usd(L.qvol24)}</td><td>${cxSideCell(r)}</td>
+          <td>${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${cpx(z.z, r.symbol)} · SL ${cpx(z.invalid, r.symbol)}</span>` : `<span class="muted small">–</span>`}</td></tr>`;
+      }).join("")}</tbody></table></div>`;
+  }
+  // charts
+  function cxChart(key) {
+    if (cxCharts[key]) return cxCharts[key];
+    const el = $(`#${key}-chart`);
+    if (!window.LightweightCharts || !el || !el.clientWidth) return null;
+    const chart = LightweightCharts.createChart(el, Object.assign({ width: el.clientWidth, height: el.clientHeight, crosshair: { mode: 0 } }, chartTheme()));
+    const c = cxCharts[key] = { chart, candles: chart.addCandlestickSeries({}), series: [], lines: [], sym: null, lastT: 0,
+      vwap: chart.addLineSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }) };
+    new ResizeObserver(() => { if (el.clientWidth) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); }).observe(el);
+    return c;
+  }
+  function cxDrawChart(key, d, zones) {
+    const c = cxChart(key);
+    if (!c || !d || !d.bars || !d.bars.length) return;
+    const T = (t) => t + IST_SHIFT, up = cssVar("--up"), down = cssVar("--down"), muted = cssVar("--muted");
+    const p = cdec(d.bars[d.bars.length - 1].c, d.symbol), fmt = { type: "price", precision: p, minMove: Math.pow(10, -p) };
+    const same = c.sym === d.symbol;
+    c.chart.applyOptions(chartTheme());
+    c.candles.applyOptions({ upColor: "rgba(0,0,0,0)", borderUpColor: up, wickUpColor: up, downColor: down, borderDownColor: down, wickDownColor: down, borderVisible: true, priceFormat: fmt });
+    c.vwap.applyOptions({ color: cssVar("--series-1"), priceFormat: fmt });
+    const cs = (b) => ({ time: T(b.t), open: b.o, high: b.h, low: b.l, close: b.c });
+    if (same && c.lastT) d.bars.filter((b) => b.t >= c.lastT).forEach((b) => c.candles.update(cs(b)));
+    else c.candles.setData(d.bars.map(cs));
+    c.lastT = d.bars[d.bars.length - 1].t;
+    c.vwap.setData(d.vwap.map((x) => ({ time: T(x.t), value: x.v })));
+    c.series.forEach((s) => c.chart.removeSeries(s)); c.series = [];
+    c.lines.forEach((l) => c.candles.removePriceLine(l)); c.lines = [];
+    const add = (price, color, style, title, width = 1) => { if (price != null) c.lines.push(c.candles.createPriceLine({ price, color, lineWidth: width, lineStyle: style, axisLabelVisible: true, title })); };
+    const z = (d.row || {}).zone, marks = [];
+    if (zones) {
+      for (const zz of d.zones.slice(-8)) {
+        const cur = z && zz.formed_at === z.formed_at && zz.side === z.side, col = zz.side > 0 ? up : down;
+        const end = zz.broken_at ? zz.broken_at - 300 : Math.max(c.lastT, zz.ob_start + 300);
+        for (const v of [zz.top, zz.bottom]) {
+          const s = c.chart.addLineSeries({ color: cur ? col : (zz.status === "broken" ? muted + "66" : col + "88"), lineWidth: cur ? 2 : 1, lineStyle: cur ? 0 : 2,
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: fmt });
+          s.setData([{ time: T(zz.ob_start), value: v }, { time: T(end), value: v }]);
+          c.series.push(s);
+        }
+      }
+      if (z) {
+        add(z.z, cssVar("--ink"), 0, z.side > 0 ? "buy at Z" : "sell at Z");
+        add(z.invalid, cssVar("--critical"), 0, "stop-loss", 2);
+        z.targets.forEach((t, i) => add(t, cssVar("--good"), 2, `T${i + 1}`));
+        if (!z.targets.length) add(zTarget(z), cssVar("--good"), 2, "2R");
+        const pos = z.side > 0 ? "belowBar" : "aboveBar";
+        marks.push({ time: T(z.formed_at), position: pos, color: cssVar("--ink"), shape: "circle", text: `Z given ${fmtIST(z.known_at)}` });
+        if (z.entry_at) marks.push({ time: T(z.entry_at), position: pos, color: z.side > 0 ? up : down, shape: z.side > 0 ? "arrowUp" : "arrowDown", text: `entry ${fmtIST(z.entry_at)}` });
+      }
+      if (d.cpr) { add(d.cpr.tc, cssVar("--cpr"), 2, "CPR"); add(d.cpr.bc, cssVar("--cpr"), 2, ""); }
+    }
+    add(d.prev_close, muted, 1, "prev close");
+    c.candles.setMarkers(marks);
+    if (!same) { c.chart.timeScale().fitContent(); c.sym = d.symbol; }
+  }
+  function drawCXDetail(which) {
+    const d = cxD;
+    if (!d || (which !== "cx" && which !== "cxob")) return;
+    const title = d.error ? `${cxShort(d.symbol)}: ${d.error}` : `${cxShort(d.symbol)} · ${d.name}`;
+    if (which === "cx") {
+      $("#cx-title").textContent = title;
+      $("#cx-src").textContent = d.error ? "" : `$${cpx((d.live || {}).price, d.symbol)} · ${d.gold ? "Binance XAUUSDT perpetual" : "Binance spot"}`;
+      if (!d.error) cxDrawChart("cx", d, false);
+      return;
+    }
+    $("#cxob-title").textContent = title;
+    if (d.error) { $("#cxob-fields").innerHTML = ""; return; }
+    $("#cxob-src").textContent = "finished 5-minute candles, last 24 hours; zones are today's (UTC day)";
+    cxDrawChart("cxob", d, true);
+    const r = d.row || {}, z = r.zone, L = d.live || {}, c = r.confirm, rules = (cx && cx.confirm_rules) || [];
+    $("#cxob-fields").innerHTML = `<div class="ob-fields"><dl>
+      <dt>Price</dt><dd><b>$${cpx(L.price, d.symbol)}</b> · <span class="${pnlClass(L.chg_day)}">${pct(L.chg_day, 2)} today</span> · ${pct(L.chg24, 2)} over 24 hours</dd>
+      <dt>Side</dt><dd class="${sideCls(r.side)}">${sideWord(r.side)}${r.rank ? ` · #${r.rank} of ${r.of}` : ""}</dd>
+      <dt>Rule</dt><dd>${r.rule === "pick" ? `<span class="chip good">Pick</span>` : esc(r.rule || "–")}</dd>
+      <dt>Strength</dt><dd>${(r.score || 0).toFixed(2)} · ${r.move_atr != null ? r.move_atr.toFixed(2) + " ATR" : "–"} · straight ${Math.round(100 * (r.clean || 0))}%</dd>
+      <dt>Order block</dt><dd>${z ? `${cpx(z.bottom, d.symbol)} – ${cpx(z.top, d.symbol)} · ${esc(z.status)}${z.visits ? ` (${z.visits} visit${z.visits > 1 ? "s" : ""})` : ""}${z.strong ? " · strong push" : ""}` : r.event ? "none: event risk" : r.side ? "none yet" : "none: the pair is flat or choppy today"}</dd>
+      <dt>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</dt><dd>${z ? `<b>${cpx(z.z, d.symbol)}</b> · given at ${zGiven(z)}, when the ${fmtIST(z.formed_at)} candle closed through the last swing ${z.side > 0 ? "high" : "low"}` : "–"}</dd>
+      <dt>Entry signal</dt><dd>${!z ? "–" : zEntry(z) ? `price came back to Z in the ${zEntry(z)}–${fmtIST(z.entry_at + 300)} candle` : "not yet: waiting for price to come back to Z"}</dd>
+      <dt>Stop-loss</dt><dd>${z ? `<b class="neg">${cpx(z.invalid, d.symbol)}</b> · risk ${cpx(Math.abs(z.z - z.invalid), d.symbol)} (${(100 * Math.abs(z.z - z.invalid) / z.z).toFixed(2)}%) from Z` : "–"}</dd>
+      <dt>Target</dt><dd>${z ? `<b class="pos">${cxTargets(z, d.symbol)}</b>` : "–"}</dd>
+      <dt>R:R</dt><dd>${rr(z)}</dd>
+      <dt>Futures OI</dt><dd>${r.oi_chg != null ? `${pct(r.oi_chg, 1)} since 05:30 IST` : "–"}${r.funding != null ? ` · funding ${(100 * r.funding).toFixed(4)}% every 8 hours` : ""}</dd>
+      <dt>Daily ATR</dt><dd>${cpx(r.atr, d.symbol)}</dd></dl>
+      <div class="checks"><b>Alignment ${r.aligned ?? 0}/${r.aligned_of ?? 0}</b>${Object.keys(CXALIGN).filter((k) => r.checks && k in r.checks).map((k) =>
+        `<span>${r.checks[k] == null ? "–" : r.checks[k] ? "✓" : "✗"} ${CXALIGN[k]}${r.checks[k] == null ? " (not counted)" : ""}</span>`).join("")}</div>
+      <div class="checks"><b>Confirmations ${c ? `${c.score}/${c.of}` : "–"}</b>${c ? rules.map((x) => { const k = c.checks[x.key]; return `<span>${!k || k.ok == null ? "–" : k.ok ? "✓" : "✗"} ${esc(x.label)}: ${esc((k && k.text) || "no data")}</span>`; }).join("")
+        : `<span class="muted">only for a pair on a side of the board</span>`}</div>
+      <p class="note">Wait for price to come back to Z; chasing worsens R:R. Not backtested on crypto or gold.</p></div>`;
+  }
+  // order blocks
+  function cxPickCard(r) {
+    const z = r.zone, L = cxLive(r.symbol);
+    return `<div class="pick ${r.symbol === cxSel ? "selected" : ""}" data-cx="${r.symbol}" tabindex="0">
+      <div class="top"><b>${cxShort(r.symbol)}</b><span class="grow"></span><span class="${pnlClass(L.chg_day)} num">${pct(L.chg_day, 2)}</span></div>
+      <div class="small"><span class="${sideCls(r.side)}">${sideWord(r.side)}</span> · <span class="num">$${cpx(L.price, r.symbol)}</span></div>
+      <div class="muted small">${esc(r.sector)}${r.rank ? ` · #${r.rank}` : ""} · ${r.aligned}/${r.aligned_of} aligned${r.confirm ? ` · ${r.confirm.score}/${r.confirm.of} confirmed` : ""}</div>
+      <div class="lv">${z ? `<span>${r.side < 0 ? "Sell zone" : "Buy zone"}</span><span>${cpx(z.bottom, r.symbol)} – ${cpx(z.top, r.symbol)} (${esc(z.status)})</span>
+        <span>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</span><span><b>${cpx(z.z, r.symbol)}</b> · given ${zGiven(z)}</span>
+        <span>Stop-loss</span><span><b class="neg">${cpx(z.invalid, r.symbol)}</b></span>
+        <span>Target</span><span><b class="pos">${cxTargets(z, r.symbol)}</b></span><span>R:R</span><span>${rr(z)}</span>
+        <span>Entry signal</span><span>${zEntry(z) ? `back at Z ${zEntry(z)}` : "waiting for price to return"}</span>`
+        : `<span>Zone</span><span>${r.side ? "no order block yet" : r.event ? "event risk: no levels" : "flat or choppy today"}</span>`}</div></div>`;
+  }
+  function cxBoardTable(rows, side) {
+    if (!rows.length) return `<p class="empty">No ${side > 0 ? "bullish" : "bearish"} coin is moving cleanly right now.</p>`;
+    const mx = Math.max(...rows.map((r) => Math.abs(r.score || 0)), 0.01);
+    return `<div class="table-wrap"><table class="ob-table"><thead><tr><th>#</th><th>Pair</th><th class="r">Today</th><th>Strength</th><th>Entry · stop-loss · target</th><th>Status</th></tr></thead><tbody>${rows.map((r) => {
+      const z = r.zone, zc = z ? ZCHIP[z.status] : null, L = cxLive(r.symbol);
+      const rule = r.rule === "pick" ? `<span class="chip good">Pick</span>` : r.event ? `<span class="chip warn">Event risk</span>` : `<span class="muted small">${esc((r.rule || "").replace("not picked · ", ""))}</span>`;
+      return `<tr class="clickable ${r.symbol === cxSel ? "selected" : ""}" data-cx="${r.symbol}" tabindex="0">
+        <td class="num">${r.rank}</td><td><b>${cxShort(r.symbol)}</b><span class="name">${esc(r.sector)} · $${cpx(L.price, r.symbol)}</span></td>
+        <td class="r ${pnlClass(L.chg_day)}">${pct(L.chg_day, 2)}</td>
+        <td class="num"><span class="sbar" style="width:${(42 * Math.abs(r.score) / mx).toFixed(0)}px;background:${side > 0 ? "var(--up)" : "var(--down)"}"></span>${(r.score || 0).toFixed(2)}<span class="name">straight ${Math.round(100 * (r.clean || 0))}%</span></td>
+        <td>${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${cpx(z.z, r.symbol)} · ${rr(z)}</span><span class="name num">SL <span class="neg">${cpx(z.invalid, r.symbol)}</span> · T <span class="pos">${cpx(zTarget(z), r.symbol)}</span></span><span class="name num">${zWhen(z)}</span>`
+          : `<span class="muted small">${r.event ? "no levels" : "none yet"}</span>`}</td>
+        <td>${rule}<span class="name">${cxDots(r)} ${r.aligned}/${r.aligned_of}${r.confirm ? ` · ${r.confirm.score}/${r.confirm.of} confirmed` : ""}</span></td></tr>`;
+    }).join("")}</tbody></table></div>`;
+  }
+  function cxChoppy() {
+    const flat = (cx.rows || []).filter((r) => !r.side);
+    return flat.length ? `<p class="note">Flat or choppy today, so not on a side: ${flat.map((r) => `<a href="#cxob" data-cx="${r.symbol}">${cxShort(r.symbol)}</a>`).join(" · ")}
+      (straightness under 25%: today's path went back and forth more than it went anywhere).</p>` : "";
+  }
+  function drawCXBoard(ok) {
+    if (!ok) { $("#cxob-gold").innerHTML = ""; $("#cxob-board").innerHTML = ""; return; }
+    const g = cx.gold;
+    $("#cxob-gold").innerHTML = g ? `<div class="card cx-gold"><div class="card-head"><h2>XAUUSD · gold</h2><span class="muted small">Binance XAUUSDT perpetual · shown on its own, not ranked with coins</span></div>
+      <div class="ob-picks" style="margin:0">${cxPickCard(g)}</div></div>` : "";
+    const picks = cx.picks || [];
+    $("#cxob-board").innerHTML = `<h2 class="cx-h">Crypto picks</h2>${picks.length ? `<div class="ob-picks">${picks.map(cxPickCard).join("")}</div>` : `<div class="card"><p class="empty">No picks: no coin passed the rules right now.</p></div>`}
+      <div class="ob-boards">
+        <div class="card flush"><div class="card-head"><h2 class="side-bull">Bullish board</h2><span class="muted small">by strength today · for buyers</span></div>${cxBoardTable(cx.bullish || [], 1)}</div>
+        <div class="card flush"><div class="card-head"><h2 class="side-bear">Bearish board</h2><span class="muted small">by strength today · for sellers</span></div>${cxBoardTable(cx.bearish || [], -1)}</div>
+      </div>${cxChoppy()}`;
+  }
+  // confirmations
+  function cxCfTable(rows, label) {
+    const rules = cx.confirm_rules || [];
+    rows = rows.filter((r) => r.confirm).sort((a, b) => b.confirm.score - a.confirm.score || (a.rank || 0) - (b.rank || 0));
+    if (!rows.length) return `<p class="empty">${esc(label)}</p>`;
+    return `<div class="table-wrap"><table class="ob-table cf-table"><thead><tr><th>Pair</th><th class="r">Today</th><th>Confirmed</th>
+      ${rules.map((x) => `<th class="cf" title="${esc(x.rule)}">${esc(x.label)}</th>`).join("")}<th>Board</th><th>Zone</th></tr></thead><tbody>${rows.map((r) => {
+        const c = r.confirm, z = r.zone, zc = z ? ZCHIP[z.status] : null, L = cxLive(r.symbol);
+        return `<tr class="clickable" data-cx="${r.symbol}" tabindex="0">
+          <td><b>${cxShort(r.symbol)}</b><span class="name">${r.rank ? `#${r.rank} · ` : ""}<span class="${sideCls(r.side)}">${sideWord(r.side)}</span> · ${esc(r.sector)}</span></td>
+          <td class="r ${pnlClass(L.chg_day)}">${pct(L.chg_day, 2)}</td>
+          <td class="num"><span class="sbar" style="width:${(42 * c.score / Math.max(1, rules.length)).toFixed(0)}px;background:${r.side > 0 ? "var(--up)" : "var(--down)"}"></span>${c.score}/${c.of}</td>
+          ${rules.map((x) => { const k = c.checks[x.key]; return `<td class="cf" title="${esc(x.label + ": " + ((k && k.text) || "no data"))}">${cfMark(k)}<span class="name num">${esc((k && k.v) || "–")}</span></td>`; }).join("")}
+          <td>${cxDots(r)} <span class="small">${r.aligned}/${r.aligned_of}</span>${r.rule === "pick" ? ` <span class="chip good">Pick</span>` : ""}</td>
+          <td>${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${cpx(z.z, r.symbol)}</span>` : `<span class="muted small">none yet</span>`}</td></tr>`;
+      }).join("")}</tbody></table></div>`;
+  }
+  function drawCXConfirm(ok) {
+    if (!ok) { $("#cxcf-body").innerHTML = ""; return; }
+    const g = cx.gold;
+    $("#cxcf-body").innerHTML = `<div class="card"><p class="note" style="margin:0">Each check asks whether that piece of evidence agrees with the pair's side on the board: ✓ agrees, ✗ disagrees, – no data (not counted).
+        Hover a column for its rule, a cell for its numbers; click a row for its chart. Futures open interest and funding come from Binance's USD-M perpetuals, re-read every 5 minutes
+        ${cx.slow_at ? `(last ${fmtIST(cx.slow_at)})` : ""}; the rest from Binance candles. Not part of the picks, and not backtested.</p></div>
+      <div class="card flush"><div class="card-head"><h2>XAUUSD · gold</h2><span class="muted small">its own side, not ranked with coins</span></div>${cxCfTable(g ? [g] : [], "Gold is flat or choppy today: no side to confirm.")}</div>
+      <div class="card flush"><div class="card-head"><h2 class="side-bull">Bullish confirmations</h2><span class="muted small">coins on the bullish board</span></div>${cxCfTable(cx.bullish || [], "No bullish coin is moving cleanly right now.")}</div>
+      <div class="card flush"><div class="card-head"><h2 class="side-bear">Bearish confirmations</h2><span class="muted small">coins on the bearish board</span></div>${cxCfTable(cx.bearish || [], "No bearish coin is moving cleanly right now.")}</div>
+      ${cxChoppy()}`;
   }
   function calHeat(el, days) {
     if (!el) return;

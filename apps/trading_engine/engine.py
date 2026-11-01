@@ -66,6 +66,8 @@ class Engine:
         self.scanner = ScannerService(S, self.universe, self.history)
         from apps.trading_engine.obboard import OrderBlockBoard
         self.obboard = OrderBlockBoard(self)
+        from apps.trading_engine.cxboard import CryptoBoard
+        self.cx = CryptoBoard(S)                      # crypto & XAUUSD from Binance: analytics only, never traded
         self.strategies = build_strategies(S)
         self.feed = FeedManager(S, self.universe, self.state)
         self.gate = RiskGate(S, self.kill, self.universe)
@@ -95,6 +97,7 @@ class Engine:
     # ================================================================ start-up
     def start(self):
         threading.Thread(target=self._job_worker, name="jobs", daemon=True).start()
+        self.cx.start()                               # its own threads; needs no Angel One login
         self.submit_job("startup", self._startup)
         threading.Thread(target=self._loop, name="engine", daemon=True).start()
 

@@ -102,6 +102,9 @@ the market clock, the data feed and whether new trades are allowed, with **Pause
 | Home | one sentence on what the bot is doing, the day's timeline, anything that needs you, P&L, open positions, latest signals, results and big deals coming up |
 | Live chart | candlestick chart (VWAP, opening range, stop / target lines, fills) and the watchlist with each stock's nearest trigger |
 | Order blocks | every NSE F&O stock ranked each minute by clean one-way strength (bullish and bearish boards, top 3 picks a side, max 2 per sector, event-risk filter), each stock's 5-minute order-block zone with entry, invalidation, liquidity targets and R:R, the time the entry price was given (the break candle's close) and the time price first came back to it (the entry signal), alignment checks (stock, sector, breadth, VWAP), yesterday's futures OI build-up, a market map and sector flow. Rules in `market/orderblocks.py` |
+| Crypto & XAUUSD: Live prices | Binance websocket prices for 17 coins and gold (XAUUSD, Binance's XAUUSDT perpetual): today's and 24-hour change, range, volume, and a live 5-minute chart |
+| Crypto & XAUUSD: Order blocks | the order-block board for crypto (coins ranked by strength over the UTC day, picks, zones with entry, stop-loss, target and times) and gold on its own; analytics only (`apps/trading_engine/cxboard.py`) |
+| Crypto & XAUUSD: Confirmations | futures open interest and funding, taker buying, volume, CPR, previous day and 20-day trend for each pair on a side (`market/crypto/confirmations.py`) |
 | Signals | every rule match today and what the bot did (traded, waiting for you, blocked, benched), filterable |
 | Trades | today's trades with Exit buttons; 30-day history by day and by strategy |
 | Alerts | price alerts and the full activity log |
@@ -128,7 +131,7 @@ Money: `capital_inr`, `cash_buffer_pct`, `max_position_pct`, `max_order_inr`, `m
 `max_trades_per_day`, `max_trades_per_symbol`, `max_open_positions`, `min_reward_risk`,
 `min_risk_pct` / `max_risk_pct` (stop distance bounds), `max_entry_slip_pct`, `allow_short`,
 `blocked`. Time (IST): `no_entries_before`, `no_entries_after`, `flat_by`. Plus `strategies.*`,
-`timemachine.*`, `auto_select.*`, `universe.*`, `news.*`, `costs.*` (check them against your
+`timemachine.*`, `auto_select.*`, `universe.*`, `news.*`, `crypto.*`, `costs.*` (check them against your
 broker's charge sheet), `slippage_bps`, `notify.*`, `llm_veto.*` (Gemini can only veto).
 Restart `./run.sh` after editing.
 
@@ -154,6 +157,14 @@ trader-analyst reads US filings on SEC EDGAR and trader-pelosi reads US Congress
 disclosures. India has neither, so the NSE versions use the exchange's results calendar plus Yahoo
 Finance's quarterly numbers, and NSE's bulk / block deal reports (who traded big, by name).
 NSE's insider-trading (SEBI PIT) feed needs a browser session and is not used.
+
+Crypto and gold prices come from Binance's public market data, with no account or key: the spot websocket
+(`data-stream.binance.vision`) for coins, the futures market websocket (`wss://fstream.binance.com/market/...`; the old
+futures paths no longer stream) for XAUUSDT, and REST for history, open interest and funding (`market/crypto/binance.py`).
+"Today" for crypto is the UTC day (05:30 to 05:30 IST). Configure it in `configs/trading.json` → `crypto`
+(`enabled`, `symbols`, `gold`). The crypto pages are analytics only: the bot never trades crypto or gold. For Indian
+residents, XAUUSD and forex CFDs with offshore brokers are not permitted under FEMA; gold trades in India on MCX or as
+gold ETFs and Sovereign Gold Bonds.
 
 `MONEYV2_DATA_PROVIDER=yahoo ./run.sh` starts without logging in to Angel One (`auto` / `angel`
 are the other values), for example while a research download is using the Angel session.

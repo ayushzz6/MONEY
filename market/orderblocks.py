@@ -51,12 +51,19 @@ class Zone:
 
     def to_dict(self):
         d = asdict(self)
-        for k in ("top", "bottom", "z", "invalid", "rr"):
-            if d[k] is not None:
-                d[k] = round(d[k], 2)
-        d["targets"] = [round(x, 2) for x in self.targets]
-        d["behind"] = [round(x, 2) for x in self.behind]
+        for k in ("top", "bottom", "z", "invalid"):
+            d[k] = _r(d[k])
+        if d["rr"] is not None:
+            d["rr"] = round(d["rr"], 2)
+        d["targets"] = [_r(x) for x in self.targets]
+        d["behind"] = [_r(x) for x in self.behind]
         return d
+
+
+def _r(x: float) -> float:
+    """A price rounded for display without losing a cheap coin's digits: 2 decimals from 100 up, 4 from 1, else 6 figures."""
+    a = abs(x)
+    return round(x, 2) if a >= 100 else round(x, 4) if a >= 1 else float(f"{x:.6g}")
 
 
 def _swings(H, L):
@@ -131,14 +138,14 @@ def detect_zones(bars, prev_high=None, prev_low=None) -> List[Zone]:
         if zz.side > 0:
             ahead = [H[i] for i in sh if H[i] > max(zz.z, last)] + [day_hi] + ([prev_high] if prev_high else []) + \
                     [o.bottom for o in zones if o.side < 0 and o.status != "broken" and o.bottom > max(zz.z, last)]
-            zz.targets = sorted({round(x, 2) for x in ahead if x > max(zz.z, last) * 1.0005})[:2]
-            zz.behind = sorted({round(L[i], 2) for i in sl if L[i] < zz.invalid}, reverse=True)[:3]
+            zz.targets = sorted({_r(x) for x in ahead if x > max(zz.z, last) * 1.0005})[:2]
+            zz.behind = sorted({_r(L[i]) for i in sl if L[i] < zz.invalid}, reverse=True)[:3]
             risk = zz.z - zz.invalid
         else:
             ahead = [L[i] for i in sl if L[i] < min(zz.z, last)] + [day_lo] + ([prev_low] if prev_low else []) + \
                     [o.top for o in zones if o.side > 0 and o.status != "broken" and o.top < min(zz.z, last)]
-            zz.targets = sorted({round(x, 2) for x in ahead if x < min(zz.z, last) * 0.9995}, reverse=True)[:2]
-            zz.behind = sorted({round(H[i], 2) for i in sh if H[i] > zz.invalid})[:3]
+            zz.targets = sorted({_r(x) for x in ahead if x < min(zz.z, last) * 0.9995}, reverse=True)[:2]
+            zz.behind = sorted({_r(H[i]) for i in sh if H[i] > zz.invalid})[:3]
             risk = zz.invalid - zz.z
         if zz.targets and risk > 0:
             zz.rr = abs(zz.targets[-1] - zz.z) / risk

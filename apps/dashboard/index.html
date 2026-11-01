@@ -19,6 +19,10 @@
       <a href="#signals" data-page="signals"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Signals<span class="count" id="nc-signals"></span></a>
       <a href="#trades" data-page="trades"><svg viewBox="0 0 24 24"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>Trades<span class="count" id="nc-trades"></span></a>
       <a href="#alerts" data-page="alerts"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 21h4"/></svg>Alerts</a>
+      <div class="nav-label">Crypto &amp; XAUUSD</div>
+      <a href="#cx" data-page="cx"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 0 1 0 4h-4m0 0h4.5a2 2 0 0 1 0 4H9.5zM9.5 8v8M11 6v2M11 16v2"/></svg>Live prices</a>
+      <a href="#cxob" data-page="cxob"><svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8M3 20h18"/></svg>Order blocks</a>
+      <a href="#cxcf" data-page="cxcf"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10M5 19h14"/></svg>Confirmations</a>
       <div class="nav-label">Research &amp; markets</div>
       <a href="#strategies" data-page="strategies"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>Strategies</a>
       <a href="#research" data-page="research"><svg viewBox="0 0 24 24"><path d="M10 3v6L4 19a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2l-6-10V3M8 3h8"/></svg>Research</a>
@@ -134,6 +138,47 @@
       </section>
 
       <!-- SIGNALS -->
+      <section class="page hidden" id="page-cx">
+        <div id="cx-head"></div>
+        <div id="cx-cards" class="cx-cards"></div>
+        <div class="card flush"><div class="card-head"><h2>Live prices</h2><span class="muted small">Binance websocket · click a row for its chart</span></div><div id="cx-table"></div></div>
+        <div class="card" id="cx-chart-card">
+          <div class="card-head"><h2 id="cx-title">Pick a pair</h2><span class="muted small" id="cx-src"></span></div>
+          <div class="chart-legend"><span><span class="swatch" style="background:var(--series-1)"></span>VWAP (today, UTC day)</span>
+            <span><span class="swatch dash"></span>Yesterday's close</span><span>5-minute candles, last 24 hours · the last candle moves live</span></div>
+          <div id="cx-chart" class="cx-chart"></div>
+        </div>
+        <p class="note" id="cx-note"></p>
+      </section>
+
+      <section class="page hidden" id="page-cxob">
+        <div id="cxob-head"></div>
+        <div id="cxob-gold"></div>
+        <div id="cxob-board"></div>
+        <div class="card" id="cxob-detail-card">
+          <div class="card-head"><h2 id="cxob-title">Pick a pair</h2><span class="muted small" id="cxob-src"></span></div>
+          <div class="ob-detail">
+            <div><div class="chart-legend">
+              <span><span class="swatch" style="background:var(--up)"></span>Bullish zone</span>
+              <span><span class="swatch" style="background:var(--down)"></span>Bearish zone</span>
+              <span><span class="swatch dash"></span>Earlier zones of the day</span>
+              <span><span class="swatch" style="background:var(--series-1)"></span>VWAP</span>
+              <span><span class="swatch" style="background:var(--cpr)"></span>CPR (central pivot range)</span></div>
+              <div id="cxob-chart" class="cx-chart"></div></div>
+            <div id="cxob-fields"></div>
+          </div>
+        </div>
+        <p class="note">Same rules as the NSE board (<code>market/orderblocks.py</code>), on finished 5-minute Binance candles. "Today" is the UTC day,
+          05:30 to 05:30 IST, the day Binance's daily candles use; yesterday's close, high and low, ATR, CPR and trend come from those.
+          Coins are ranked against each other; gold (XAUUSD, Binance's XAUUSDT perpetual) is shown on its own. Choppy pairs (straightness under 25%) score zero.
+          Not backtested on crypto or gold, and the NSE version lost money after costs: a screener, not trade signals. The bot never trades crypto or gold.</p>
+      </section>
+
+      <section class="page hidden" id="page-cxcf">
+        <div id="cxcf-head"></div>
+        <div id="cxcf-body"></div>
+      </section>
+
       <section class="page hidden" id="page-signals">
         <div class="card">
           <div class="filter-chips" id="sig-filters" role="group" aria-label="Show signals"></div>

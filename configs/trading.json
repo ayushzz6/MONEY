@@ -116,5 +116,28 @@
   },
   "llm_veto": {
     "enabled": false
+  },
+  "crypto": {
+    "enabled": true,
+    "gold": "XAUUSDT",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "TRXUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "DOTUSDT",
+      "LTCUSDT",
+      "BCHUSDT",
+      "NEARUSDT",
+      "SUIUSDT",
+      "UNIUSDT",
+      "AAVEUSDT"
+    ]
   }
 }

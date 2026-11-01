@@ -193,6 +193,17 @@ def create_app(engine) -> FastAPI:
         return _json({"rows": [dict(d, watch=d["symbol"] in watch) for d in rows], "as_of": engine.deals.as_of,
                       "error": engine.deals.error, "checked_at": engine.deals.checked_at})
 
+    @app.get("/api/cx/board")
+    def cx_board():
+        return _json(engine.cx.view())
+
+    @app.get("/api/cx/stock/{symbol}")
+    def cx_stock(symbol: str):
+        d = engine.cx.stock(symbol)
+        if d is None:
+            raise HTTPException(404, f"{symbol.upper()} is not on the crypto & XAUUSD board")
+        return _json(d)
+
     @app.get("/api/ob/board")
     def ob_board():
         return _json(dict(engine.obboard.view(), paper=engine.board_paper()))
