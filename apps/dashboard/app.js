@@ -1136,7 +1136,7 @@
       obAlerts = first || r.day !== obAlertDay ? r.alerts : obAlerts.concat(r.alerts).slice(-300);
       obAlertSeq = r.seq; obAlertDay = r.day;
       if (!first && r.alerts.length && obAlertsOn()) { beep(); r.alerts.forEach(notifyAlert); }
-      if (page === "ob" && obTab === "board" && ob && ob.ready) keepPlace($("#ob-board"), drawOBBoard);
+      if (page === "ob") drawOBAlerts();
     } catch (e) { /* the next poll tries again */ } finally { obAlertsBusy = false; }
   }
   function beep() {
@@ -1165,7 +1165,7 @@
       toast(window.Notification && Notification.permission === "granted" ? "Heads-up alerts on: a beep and a notification for each new one"
         : "Heads-up alerts on: a beep for each new one (this browser blocks notifications for this page: allow them in its site settings)");
     } else toast("Heads-up alerts off");
-    if (page === "ob" && ob && ob.ready) keepPlace($("#ob-board"), drawOBBoard);
+    if (page === "ob") drawOBAlerts(true);
   }
   // after a reload, sound needs one click or key press on the page before it can play
   const unlockAudio = () => { if (obAlertsOn() && (!audio || audio.state === "suspended")) { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) { /* no sound */ } } };
@@ -1188,6 +1188,7 @@
   function renderOB(entering) {
     $$("#ob-tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.obtab === obTab)));
     ["board", "confirm", "map", "sectors"].forEach((k) => $("#ob-" + k).classList.toggle("hidden", obTab !== k));
+    $("#ob-alerts").classList.toggle("hidden", obTab !== "board");
     if (entering) drawOB();
     if (entering || obStale()) loadOB().then(() => { if (page === "ob") drawOB(); });
   }
@@ -1236,16 +1237,16 @@
   setInterval(obTick, 1000);
   // redraw a container without losing its tables' sideways scroll or the focused row
   function keepPlace(el, draw) {
-    const xs = [...el.querySelectorAll(".table-wrap")].map((w) => w.scrollLeft);
+    const xs = [...el.querySelectorAll(".table-wrap")].map((w) => [w.scrollLeft, w.scrollTop]);
     const f = document.activeElement && el.contains(document.activeElement) ? document.activeElement.dataset.ob : null;
     draw();
-    el.querySelectorAll(".table-wrap").forEach((w, i) => { if (xs[i]) w.scrollLeft = xs[i]; });
+    el.querySelectorAll(".table-wrap").forEach((w, i) => { if (xs[i]) [w.scrollLeft, w.scrollTop] = xs[i]; });
     if (f) { const n = el.querySelector(`[data-ob="${CSS.escape(f)}"]`); if (n) n.focus({ preventScroll: true }); }
   }
   function drawOB(fromTick) {
     const head = $("#ob-head");
     if (!ob) { head.innerHTML = `<div class="card"><p class="empty">Loading the board…</p></div>`; return; }
-    if (!ob.ready) { head.innerHTML = `<div class="card"><p class="empty">${esc(ob.error || "The board is being built.")}</p></div>`; $("#ob-board").innerHTML = ""; return; }
+    if (!ob.ready) { head.innerHTML = `<div class="card"><p class="empty">${esc(ob.error || "The board is being built.")}</p></div>`; $("#ob-board").innerHTML = ""; drawOBAlerts(); return; }
     const sess = ob.live ? `<span class="chip good">Live</span> prices every second · ranks and zones ${fmtIST(ob.updated_at)}` : `<span class="chip">Last session</span> ${esc(fmtDay(ob.session))} close`;
     const tot = Math.max(1, ob.up + ob.down);
     head.innerHTML = `<div class="card"><div class="ob-status">
@@ -1259,6 +1260,7 @@
       const first = (ob.picks || [])[0] || obRows()[0];
       obSel = first ? first.symbol : null;
     }
+    if (obTab === "board") drawOBAlerts();               // no-op unless the alerts changed
     const draw = { board: drawOBBoard, confirm: drawOBConfirm, map: drawOBMap, sectors: drawOBSectors }[obTab];
     if (draw) keepPlace($("#ob-" + obTab), draw);
     if (fromTick) { obDetailLive(); for (const k in obFl) obFl[k] = ""; for (const k in obHeadFl) obHeadFl[k] = false; }
@@ -1300,6 +1302,21 @@
         <td>${rule}<span class="name">${alignDots(r)} ${r.aligned}/4</span></td></tr>`;
     }).join("")}</tbody></table></div>`;
   }
+  // the Heads-up list: its own block above the board, rebuilt only when an alert arrives or Alerts is switched,
+  // never on the 1-second tick, so its scroll position (and a scroll in progress) stays where it is
+  let obAlertsDrawn = "";
+  function drawOBAlerts(force) {
+    const el = $("#ob-alerts");
+    if (!ob || !ob.ready) { el.innerHTML = ""; obAlertsDrawn = ""; return; }
+    const last = obAlerts[obAlerts.length - 1];
+    const key = `${obAlertsOn()}|${ob.live}|${obAlerts.length}|${last ? last.seq : 0}`;
+    if (!force && key === obAlertsDrawn && el.firstChild) return;
+    const w = el.querySelector(".table-wrap"), at = w ? [w.scrollLeft, w.scrollTop] : null;
+    el.innerHTML = obAlertsCard();
+    obAlertsDrawn = key;
+    const n = el.querySelector(".table-wrap");
+    if (n && at) [n.scrollLeft, n.scrollTop] = at;
+  }
   function obAlertsCard() {
     const on = obAlertsOn(), rows = obAlerts.slice(-40).reverse();
     return `<div class="card flush ob-alerts"><div class="card-head"><h2>Heads-up</h2>
@@ -1314,7 +1331,7 @@
   }
   function drawOBBoard() {
     const picks = ob.picks || [];
-    $("#ob-board").innerHTML = `${obAlertsCard()}${picks.length ? `<div class="ob-picks">${picks.map(pickCard).join("")}</div>` : `<div class="card"><p class="empty">No picks: nothing passed the rules${ob.live ? " yet" : " this session"}.</p></div>`}
+    $("#ob-board").innerHTML = `${picks.length ? `<div class="ob-picks">${picks.map(pickCard).join("")}</div>` : `<div class="card"><p class="empty">No picks: nothing passed the rules${ob.live ? " yet" : " this session"}.</p></div>`}
       <div class="ob-boards">
         <div class="card flush"><div class="card-head"><h2 class="side-bull">Bullish board</h2><span class="muted small">top 20 by strength · for buyers</span></div>${obTable(ob.bullish || [], 1)}</div>
         <div class="card flush"><div class="card-head"><h2 class="side-bear">Bearish board</h2><span class="muted small">top 20 by strength · for sellers</span></div>${obTable(ob.bearish || [], -1)}</div>
