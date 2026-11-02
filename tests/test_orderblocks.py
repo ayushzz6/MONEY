@@ -94,3 +94,47 @@ def test_backtest_strength_matches_the_live_board():
                 bars = [Bar(i, O[s, d, i], H[s, d, i], L[s, d, i], C[s, d, i]) for i in range(k + 1)]
                 ref = OB.strength(bars, float(C[s, d - 1, -1]), float(Bd["atr"][s, d]))["score"]
                 assert abs(ref - float(Bd["score"][s, d, k])) < 2e-3
+
+
+def _walk_days(n_days=60):
+    """Seeded random-walk sessions with many zones on both sides."""
+    import random
+    for seed in range(n_days):
+        rnd, p, rows = random.Random(seed), 100.0, []
+        for _ in range(75):
+            o = p
+            c = o * (1 + rnd.gauss(0, 0.004))
+            rows.append((round(o, 2), round(max(o, c) * (1 + abs(rnd.gauss(0, 0.002))), 2),
+                         round(min(o, c) * (1 - abs(rnd.gauss(0, 0.002))), 2), round(c, 2)))
+            p = c
+        yield make_day(DAY, rows)
+
+
+def test_targets_as_given_are_the_boards_targets_when_the_zone_was_given():
+    seen = 0
+    for bars in _walk_days():
+        at = {b.start: i for i, b in enumerate(bars)}
+        for z in OB.detect_zones(bars, 101.5, 98.5):
+            t = at[z.formed_at]
+            if t < 2 * OB.SWING + 2:                      # detect_zones needs 7 candles
+                continue
+            then = next(x for x in OB.detect_zones(bars[:t + 1], 101.5, 98.5) if x.formed_at == z.formed_at and x.side == z.side)
+            assert z.given_targets == then.targets and z.given_rr == then.rr
+            seen += 1
+    assert seen > 200
+    z = OB.detect_zones(_trend_day())[0]
+    d = z.to_dict()
+    assert d["given_targets"] == z.given_targets and (d["given_rr"] is None or d["given_rr"] == round(z.given_rr, 2))
+
+
+def test_next_break_says_when_the_forming_candle_would_give_a_zone():
+    nb = OB.next_break(_trend_day()[:8])                  # the 09:55 candle forming
+    assert nb[1]["level"] == 101.2 and (nb[1]["ob_bottom"], nb[1]["ob_top"]) == (99.3, 99.9) and nb[1]["prev_close"] == 100.5
+    assert OB.next_break(_trend_day()[:9])[1] is None    # it closed above: no new break on the next candle
+    for bars in _walk_days(30):                          # a zone is given at bar n exactly when next_break said so
+        for n in range(6, 75):
+            nb = OB.next_break(bars[:n])
+            given = {z.side for z in OB.detect_zones(bars[:n + 1], 101.5, 98.5) if z.formed_at == bars[n].start}
+            for side in (1, -1):
+                x = nb[side]
+                assert (x is not None and ((bars[n].c > x["level"]) if side > 0 else (bars[n].c < x["level"]))) == (side in given)

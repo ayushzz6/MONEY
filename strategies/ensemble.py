@@ -4,10 +4,10 @@ from typing import Dict, List
 from strategies.base import BaseStrategy
 from strategies.breakout.level import LevelBreakout
 from strategies.breakout.orb import OpeningRangeBreakout
-from strategies.smc.order_block import OrderBlockRetest
+from strategies.smc.order_block import OrderBlockFirstStage, OrderBlockRetest
 from strategies.vwap.reclaim import VwapReclaim
 
-REGISTRY = {cls.name: cls for cls in (OpeningRangeBreakout, LevelBreakout, VwapReclaim, OrderBlockRetest)}
+REGISTRY = {cls.name: cls for cls in (OpeningRangeBreakout, LevelBreakout, VwapReclaim, OrderBlockRetest, OrderBlockFirstStage)}
 
 
 def build_strategies(settings) -> List[BaseStrategy]:

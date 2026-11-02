@@ -218,3 +218,61 @@ def test_volume_so_far_against_the_usual_volume_by_now():
     at = dt.datetime(2026, 11, 2, 9, 27, 30, tzinfo=IST)            # half way through the third candle
     assert OrderBlockBoard._rvol_now(5000.0, prof, at) == 2.0       # usual by now 2,500
     assert OrderBlockBoard._rvol_now(None, prof, at) is None
+
+
+def test_heads_up_a_break_forming_then_the_zone_given_then_near_z():
+    import time as _t
+
+    from apps.trading_engine.obboard import OrderBlockBoard
+    from market import orderblocks as OB
+    from market.state.manager import MarketState
+    from test_orderblocks import DAY, _trend_day
+    from tests.helpers import FakeSettings
+
+    class E:
+        settings = FakeSettings()
+        state = MarketState()
+    e = E()
+    board = OrderBlockBoard(e)
+    day = _trend_day()
+    ctx = {"prev_close": 99.0, "prev_high": 103.0, "prev_low": 98.0, "atr": 2.0, "cpr": CF.cpr(103, 98, 99), "cpr_rank": 0.5, "sma": 99.0}
+
+    def put(bars, zone):
+        row = {"symbol": "X", "side": 1, "last": bars[-1].c, "change_pct": 1.0, "oi_buildup": None, "rank": 1, "zone": zone}
+        board.board = {"session": DAY, "live": True, "updated_at": _t.time(), "map": [{"symbol": "X"}], "picks": [],
+                       "bullish": [row], "bearish": [], "index_chg": None}
+        board.details = {"X": {"bars": bars, "ctx": ctx, "nb": OB.next_break(bars)}}
+
+    # the 09:55 candle trades through the swing high 101.2 (Yahoo mode: no forming candle, the last price stands in)
+    put(day[:8], None)
+    e.state.on_price("X", 101.5, _t.time(), build_bars=False)
+    board._scan(_t.time())
+    h = board.heads["X"]
+    assert h["kind"] == "break" and h["level"] == 101.2 and h["z"] == 99.9 and h["stop"] < 99.3
+    assert h["closes"] == day[8].start + 300 and h["t"]
+    e.state.on_price("X", 101.0, _t.time(), build_bars=False)                  # back under the level: nothing
+    board._scan(_t.time())
+    assert "X" not in board.heads
+    # it closed above: the zone is given at 10:00; the first-stage plan from the live price, with the risk rules' verdict
+    zone = OB.current_setup(OB.detect_zones(day[:9], 103.0, 98.0), 1).to_dict()
+    put(day[:9], zone)
+    e.state.on_price("X", 101.8, _t.time(), build_bars=False)
+    board._scan(zone["known_at"] + 60)
+    h = board.heads["X"]
+    assert h["kind"] == "given" and h["stop"] == zone["invalid"] and h["until"] == zone["known_at"] + 300
+    assert h["t"] == zone["given_targets"] and h["target"] == zone["given_targets"][-1]
+    assert abs(h["rr"] - (h["target"] - 101.8) / (101.8 - zone["invalid"])) < 0.01 and "under 1.5" in h["gate"]
+    # after that candle: near Z (within 0.1 daily ATR), and nothing further away
+    e.state.on_price("X", 100.05, _t.time(), build_bars=False)
+    board._scan(zone["known_at"] + 400)
+    assert board.heads["X"]["kind"] == "near" and board.heads["X"]["dist"] == 0.15
+    v = board.live_view()
+    assert v["rows"]["X"]["heads"]["kind"] == "near"
+    board._scan(zone["known_at"] + 401)                                         # the same heads-up is logged once
+    a = board.alerts_view(0)
+    assert [x["kind"] for x in a["alerts"]] == ["break", "given", "near"] and a["seq"] == 3
+    assert "breaking out" in a["alerts"][0]["text"] and "would refuse" in a["alerts"][1]["text"]
+    assert board.alerts_view(2)["alerts"][0]["kind"] == "near" and board.alerts_status() == {"seq": 3, "active": 1}
+    e.state.on_price("X", 100.5, _t.time(), build_bars=False)
+    board._scan(zone["known_at"] + 402)
+    assert board.heads == {}

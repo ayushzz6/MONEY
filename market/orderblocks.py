@@ -15,6 +15,8 @@ Order block (Smart Money Concepts, as commonly defined):
     Bullish: Z (entry) = zone top, invalidation S1 = zone bottom - buffer; liquidity R1 / R2 = the next swing highs,
     the day's high, yesterday's high or an opposing zone above. R:R = (R2 - Z) / (Z - S1). Bearish is the mirror.
     A zone is "broken" once a 5-minute candle closes beyond its far edge, "retested" once price comes back into it.
+    targets are the next levels ahead of the latest close (they move as the price does); given_targets are the
+    same rule frozen when the zone was given, from the candles up to its break candle only.
 
 Times (epoch seconds): the entry Z is given when the candle that broke structure closes (known_at); the entry
 signal is the first candle after it that trades back to Z (entry_at, that candle's start), before any 5-minute
@@ -48,15 +50,18 @@ class Zone:
     known_at: Optional[int] = None       # the break candle's close: when Z, the entry price, is given
     entry_at: Optional[int] = None       # start of the first candle back at Z: the entry signal
     broken_at: Optional[int] = None      # close of the candle that closed beyond the far edge
+    given_targets: List[float] = field(default_factory=list)   # the targets as they were when the zone was given
+    given_rr: Optional[float] = None
 
     def to_dict(self):
         d = asdict(self)
         for k in ("top", "bottom", "z", "invalid"):
             d[k] = _r(d[k])
-        if d["rr"] is not None:
-            d["rr"] = round(d["rr"], 2)
-        d["targets"] = [_r(x) for x in self.targets]
-        d["behind"] = [_r(x) for x in self.behind]
+        for k in ("rr", "given_rr"):
+            if d[k] is not None:
+                d[k] = round(d[k], 2)
+        for k in ("targets", "behind", "given_targets"):
+            d[k] = [_r(x) for x in getattr(self, k)]
         return d
 
 
@@ -76,6 +81,20 @@ def _swings(H, L):
         if L[i] <= min(L[i - SWING:i + SWING + 1]) and L[i] < min(L[i - SWING:i]):
             sl.append(i)
     return sh, sl
+
+
+def _ahead(zz: Zone, last, day_hi, day_lo, sw_hi, sw_lo, prev_high, prev_low, opposing) -> List[float]:
+    """The two nearest liquidity levels beyond both Z and the last close: swing highs (lows), the day's high (low),
+    yesterday's high (low) and the near edge of unbroken opposing zones."""
+    if zz.side > 0:
+        base = max(zz.z, last)
+        ahead = [h for h in sw_hi if h > base] + [day_hi] + ([prev_high] if prev_high else []) + \
+                [o.bottom for o in opposing if o.bottom > base]
+        return sorted({_r(x) for x in ahead if x > base * 1.0005})[:2]
+    base = min(zz.z, last)
+    ahead = [x for x in sw_lo if x < base] + [day_lo] + ([prev_low] if prev_low else []) + \
+            [o.top for o in opposing if o.top < base]
+    return sorted({_r(x) for x in ahead if x < base * 0.9995}, reverse=True)[:2]
 
 
 def detect_zones(bars, prev_high=None, prev_low=None) -> List[Zone]:
@@ -118,6 +137,11 @@ def detect_zones(bars, prev_high=None, prev_low=None) -> List[Zone]:
             zz = Zone(side=side, formed_at=bars[t].start, ob_start=bars[ob].start, top=top, bottom=bottom,
                       z=top if side > 0 else bottom, invalid=(bottom - buf) if side > 0 else (top + buf),
                       strong=bool(fvg or push >= avg), known_at=bars[t].start + BAR_MINUTES * 60)
+            # the targets as the board showed them when the zone was given: swings confirmed by this close, the
+            # day so far, and the opposing zones not broken by then (equal to detect_zones(bars[:t+1])'s targets)
+            zz.given_targets = _ahead(zz, C[t], max(H[:t + 1]), min(L[:t + 1]), [H[i] for i in sh if i + SWING <= t],
+                                      [L[i] for i in sl if i + SWING <= t], prev_high, prev_low,
+                                      [o for o in zones if o.side != side and (o.broken_at is None or o.broken_at > zz.known_at)])
             # what happened after it formed: the first touch of Z is the entry signal, even in the candle that breaks it
             for j in range(t + 1, n):
                 inside = (L[j] <= top) if side > 0 else (H[j] >= bottom)
@@ -134,22 +158,55 @@ def detect_zones(bars, prev_high=None, prev_low=None) -> List[Zone]:
             zones.append(zz)
     last = C[-1]
     day_hi, day_lo = max(H), min(L)
+    sw_hi, sw_lo = [H[i] for i in sh], [L[i] for i in sl]
     for zz in zones:
+        zz.targets = _ahead(zz, last, day_hi, day_lo, sw_hi, sw_lo, prev_high, prev_low,
+                            [o for o in zones if o.side != zz.side and o.status != "broken"])
         if zz.side > 0:
-            ahead = [H[i] for i in sh if H[i] > max(zz.z, last)] + [day_hi] + ([prev_high] if prev_high else []) + \
-                    [o.bottom for o in zones if o.side < 0 and o.status != "broken" and o.bottom > max(zz.z, last)]
-            zz.targets = sorted({_r(x) for x in ahead if x > max(zz.z, last) * 1.0005})[:2]
             zz.behind = sorted({_r(L[i]) for i in sl if L[i] < zz.invalid}, reverse=True)[:3]
             risk = zz.z - zz.invalid
         else:
-            ahead = [L[i] for i in sl if L[i] < min(zz.z, last)] + [day_lo] + ([prev_low] if prev_low else []) + \
-                    [o.top for o in zones if o.side > 0 and o.status != "broken" and o.top < min(zz.z, last)]
-            zz.targets = sorted({_r(x) for x in ahead if x < min(zz.z, last) * 0.9995}, reverse=True)[:2]
             zz.behind = sorted({_r(H[i]) for i in sh if H[i] > zz.invalid})[:3]
             risk = zz.invalid - zz.z
         if zz.targets and risk > 0:
             zz.rr = abs(zz.targets[-1] - zz.z) / risk
+        if zz.given_targets and risk > 0:
+            zz.given_rr = abs(zz.given_targets[-1] - zz.z) / risk
     return zones
+
+
+def next_break(bars) -> Dict[int, Optional[Dict]]:
+    """For the candle forming after `bars` (finished candles), per side (+1 / -1): the level a close beyond would
+    break (the last confirmed swing high / low), when that close would give a zone - the level not broken since the
+    swing, the last close not already beyond it and an opposite candle to be the order block - with that candle's
+    range and the buffer's average range; else None. detect_zones' own rules, for a cheap check every second."""
+    n = len(bars)
+    out: Dict[int, Optional[Dict]] = {1: None, -1: None}
+    if n < 2 * SWING + 2:                          # with the forming candle, detect_zones needs 2*SWING+3
+        return out
+    O = [b.o for b in bars]
+    H = [b.h for b in bars]
+    L = [b.l for b in bars]
+    C = [b.c for b in bars]
+    sh, sl = _swings(H, L)                         # on finished candles: all usable by the forming one
+    rng = [h - l for h, l in zip(H, L)]
+    avg = sum(rng[max(0, n - 20):n]) / max(1, len(rng[max(0, n - 20):n]))
+    for side, pts in ((1, sh), (-1, sl)):
+        if not pts:
+            continue
+        k = pts[-1]
+        lvl = H[k] if side > 0 else L[k]
+        if (C[-1] > lvl) if side > 0 else (C[-1] < lvl):
+            continue                               # already beyond: no break on this candle
+        used = any((C[q] > lvl >= C[q - 1]) if side > 0 else (C[q] < lvl <= C[q - 1]) for q in range(k + SWING + 1, n))
+        if used:
+            continue
+        ob = next((j for j in range(n - 1, max(-1, n - 16), -1) if (C[j] < O[j] if side > 0 else C[j] > O[j])), None)
+        if ob is None:
+            continue
+        out[side] = {"level": lvl, "swing": k, "prev_close": C[-1], "ob_top": H[ob], "ob_bottom": L[ob],
+                     "avg": avg, "last_start": bars[-1].start}
+    return out
 
 
 def current_setup(zones: List[Zone], side: int) -> Optional[Zone]:

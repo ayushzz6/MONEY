@@ -4,20 +4,28 @@ plus the confirmation checks: futures and options OI, live OI, CPR, volume, prev
 
 Live during the session from the engine's 5-minute bars (the F&O stocks are subscribed to the feed); at other
 times it shows the last session, rebuilt from cached 5-minute history. It runs on its own thread so a long
-morning scan never delays it. Ranks, zones and alignment move with finished candles (each minute); live_view()
-re-reads every board stock's price, live OI and price-based confirmations whenever it is asked, at most once a
-second. Angel One's OI readings (futures, the leaders' options, its build-up lists) run on a second thread.
+morning scan never delays it. Ranks, zones and alignment move with finished candles (each minute, and right after
+each 5-minute close); live_view() re-reads every board stock's price, live OI and price-based confirmations
+whenever it is asked, at most once a second. Angel One's OI readings (futures, the leaders' options, its build-up
+lists) run on a second thread.
+
+Heads-up, every second in the session, for the picks and the top 20 a side (on each stock's own side): a break
+forming (the live price beyond the swing level whose 5-minute close would give a zone, with the zone it would
+give), a zone just given (the first-stage plan: the live price, the zone's stop, the targets as given, R:R from
+the live price and the risk rules' verdict on it) and the price near Z (within NEAR_ATR daily ATRs, before the
+first touch). Each one is logged once (alerts_view) for the dashboard's list, beep and notification.
 """
 import datetime as dt
 import logging
 import threading
 import time
+from collections import deque
 from typing import Dict, List, Optional
 
 from market import calendar as cal
 from market import confirmations as CF
 from market import orderblocks as OB
-from market.candles.bars import DailyBar, split_sessions, vwap_series
+from market.candles.bars import Bar, DailyBar, split_sessions, vwap_series
 from market.instruments import fno
 
 logger = logging.getLogger("OrderBlocks")
@@ -42,6 +50,13 @@ class OrderBlockBoard:
         self._vol_prof: Dict[str, Optional[List[float]]] = {}
         self._days5m: Dict[str, Dict[str, DailyBar]] = {}
         self._hist_session = None
+        self.heads: Dict[str, Dict] = {}          # symbol -> its heads-up right now
+        self.alerts = deque(maxlen=300)           # today's heads-ups, each logged once
+        self.alert_seq = 0
+        self._alerted = set()
+        self._alert_day = None
+        self._alock = threading.Lock()
+        self._scan_err = ""
 
     # ------------------------------------------------------------ inputs
     def symbols(self) -> List[str]:
@@ -232,7 +247,7 @@ class OrderBlockBoard:
                    "oi_buildup": fno.buildup(ctx.get("oi_day_chg"), oi.get("chg_pct")), "oi_chg_pct": oi.get("chg_pct"),
                    "spark": [round(b.c, 2) for b in bars][-75:]}
             rows.append(row)
-            details[s] = {"bars": bars, "vwap": vw, "zones": zones, "ctx": ctx}
+            details[s] = {"bars": bars, "vwap": vw, "zones": zones, "ctx": ctx, "nb": OB.next_break(bars) if not ev else {}}
         ranked = OB.rank_board(rows)
         # market picture
         up = sum(1 for r in rows if (r["change_pct"] or 0) > 0)
@@ -379,7 +394,7 @@ class OrderBlockBoard:
             if rv is not None:
                 x["rvol"], x["upto"] = rv, now.strftime("%H:%M:%S")
             out["rows"][s] = {"last": round(q["ltp"], 2), "chg": out["chg"][s], "age": q.get("age_s"),
-                              "confirm": CF.evaluate(side, x) if side else None}
+                              "confirm": CF.evaluate(side, x) if side else None, "heads": self.heads.get(s)}
         out["index_chg"] = round(idx, 2) if idx is not None else None
         out["live_oi"] = {"stocks": len(live_oi), "streamed": len(self.live_oi.stream) if self.live_oi.stream_ok else 0,
                           "stream_at": self.live_oi.stream_at if self.live_oi.stream_ok else None}
@@ -406,6 +421,113 @@ class OrderBlockBoard:
             out["tail"] = {"symbol": symbol, "bars": tail, "forming": bool(f and tail and tail[-1]["t"] == f.start)}
         return out
 
+    # ------------------------------------------------------------ heads-up, every second in the session
+    NEAR_ATR = 0.1                                # "near Z": within this many daily ATRs of Z, before the first touch
+
+    def _first_rules(self) -> Dict:
+        """The first-stage plan's rules: the first-stage strategy's window and target, the risk rules' limits."""
+        S = self.e.settings
+        p = S.strategy("order_block_first") or {}
+        return {"window": int(p.get("window_bars", 1)) * cal.BAR_MINUTES * 60, "t1": str(p.get("target", "T2")).upper() == "T1",
+                "target_r": float(p.get("target_r", 2.0)), "min_rr": float(S.get("min_reward_risk", 1.0)),
+                "min_pct": float(S.get("min_risk_pct", 0.1)), "max_pct": float(S.get("max_risk_pct", 3.0))}
+
+    def _scan(self, t_now: float):
+        """The heads-up of the picks and the top 20 a side, on each stock's own side; each new one logged once."""
+        with self._lock:
+            b, details = self.board, self.details
+        if not b or not b.get("live"):
+            self.heads = {}
+            return
+        if self._alert_day != b["session"]:
+            with self._alock:
+                self._alert_day, self._alerted = b["session"], set()
+                self.alerts.clear()
+        rules = self._first_rules()
+        heads, seen = {}, set()
+        for r in (b.get("picks") or []) + (b.get("bullish") or []) + (b.get("bearish") or []):
+            s, side = r["symbol"], r.get("side", 0)
+            if s in seen or not side or r.get("event") or s not in details:
+                continue
+            seen.add(s)
+            p, age = self.e.state.price(s)
+            if not p or age is None or age > 60:
+                continue
+            h = self._heads_for(s, side, r.get("zone"), p, details[s], t_now, rules)
+            if h:
+                heads[s] = h
+                self._alert(s, side, h, t_now)
+        self.heads = heads
+
+    def _heads_for(self, s: str, side: int, z: Optional[Dict], p: float, d: Dict, t_now: float, rules: Dict) -> Optional[Dict]:
+        """One stock's heads-up at the live price p: a break forming, a zone just given (first stage) or near Z."""
+        bars = self.e.state.bars(s) or d["bars"]
+        nb = d.get("nb") or {}
+        if bars and d["bars"] and bars[-1].start != d["bars"][-1].start:
+            nb = OB.next_break(bars)                  # a candle closed since the board's last refresh
+        x = nb.get(side)
+        if x and ((p > x["level"]) if side > 0 else (p < x["level"])):
+            last, f = bars[-1], self.e.state.forming_bar(s)
+            if f is not None and f.start > last.start:
+                cur = Bar(f.start, f.o, max(f.h, p), min(f.l, p), p, f.v)
+            else:                                     # Yahoo: no forming candle, the last price stands in for one
+                cur = Bar(last.start + cal.BAR_MINUTES * 60, last.c, max(last.c, p), min(last.c, p), p, 0.0)
+            wz = next((zz for zz in OB.detect_zones(bars + [cur], d["ctx"]["prev_high"], d["ctx"]["prev_low"])
+                       if zz.formed_at == cur.start and zz.side == side), None)
+            if wz:
+                return {"kind": "break", "price": round(p, 2), "level": OB._r(x["level"]), "z": OB._r(wz.z),
+                        "stop": OB._r(wz.invalid), "t": [OB._r(v) for v in wz.given_targets], "closes": cur.start + cal.BAR_MINUTES * 60}
+        if not z or z.get("status") == "broken" or z.get("entry_at"):
+            return None
+        beyond = (p - z["z"]) * side
+        if t_now <= z["known_at"] + rules["window"] and beyond > 0:
+            risk = (p - z["invalid"]) * side
+            ahead = [v for v in z.get("given_targets") or [] if (v - p) * side > 0]
+            tgt = (ahead[0] if rules["t1"] else ahead[-1]) if ahead else p + side * rules["target_r"] * risk
+            rr = (tgt - p) * side / risk if risk > 0 else 0.0
+            pct = 100.0 * risk / p
+            gate = (f"reward:risk {rr:.2f} from {p:.2f} is under {rules['min_rr']:g}" if rr + 1e-9 < rules["min_rr"] else
+                    f"the stop is {pct:.2f}% away, over {rules['max_pct']:g}%" if pct > rules["max_pct"] else
+                    f"the stop is {pct:.2f}% away, under {rules['min_pct']:g}%" if pct < rules["min_pct"] else None)
+            return {"kind": "given", "price": round(p, 2), "z": z["z"], "stop": z["invalid"], "t": z.get("given_targets") or [],
+                    "target": OB._r(tgt), "rr": round(rr, 2), "risk_pct": round(pct, 2), "gate": gate,
+                    "until": z["known_at"] + rules["window"], "formed": z["formed_at"]}
+        atr = d["ctx"].get("atr") or 0.0
+        if atr > 0 and 0 < beyond <= self.NEAR_ATR * atr:
+            return {"kind": "near", "price": round(p, 2), "z": z["z"], "dist": round(beyond, 2), "dist_atr": round(beyond / atr, 3),
+                    "formed": z["formed_at"]}
+        return None
+
+    def _alert(self, s: str, side: int, h: Dict, t_now: float):
+        key = (s, side, h["kind"], h["closes"] if h["kind"] == "break" else h["formed"])
+        with self._alock:
+            if key in self._alerted:
+                return
+            self._alerted.add(key)
+            self.alert_seq += 1
+            self.alerts.append(dict(h, seq=self.alert_seq, at=t_now, sym=s, side=side, text=self._alert_text(s, side, h)))
+
+    @staticmethod
+    def _alert_text(s: str, side: int, h: Dict) -> str:
+        buy, hm = side > 0, (lambda ts: cal.to_ist(ts).strftime("%H:%M"))
+        if h["kind"] == "break":
+            return (f"{s} breaking {'out' if buy else 'down'}: {h['price']:.2f} is {'above' if buy else 'below'} the swing "
+                    f"{'high' if buy else 'low'} {h['level']:.2f}. If the {hm(h['closes'] - cal.BAR_MINUTES * 60)} candle closes "
+                    f"there, a {'buy' if buy else 'sell'} zone: Z {h['z']:.2f}, stop-loss {h['stop']:.2f}")
+        if h["kind"] == "given":
+            return (f"{s} {'buy' if buy else 'sell'} zone given: first stage at {h['price']:.2f}, stop-loss {h['stop']:.2f}, "
+                    f"target {h['target']:.2f} (R:R {h['rr']:.1f}) until {hm(h['until'])}"
+                    + (f". The risk check would refuse it: {h['gate']}" if h["gate"] else ""))
+        return f"{s} near Z: {h['price']:.2f} is {h['dist']:.2f} from Z {h['z']:.2f}"
+
+    def alerts_status(self) -> Dict:
+        return {"seq": self.alert_seq, "active": len(self.heads)}
+
+    def alerts_view(self, after: int = 0) -> Dict:
+        with self._alock:
+            rows = [a for a in self.alerts if a["seq"] > after]
+        return {"seq": self.alert_seq, "day": self._alert_day, "alerts": rows}
+
     # ------------------------------------------------------------ its own clock
     def start(self):
         threading.Thread(target=self._loop, name="orderblocks", daemon=True).start()
@@ -426,14 +548,22 @@ class OrderBlockBoard:
                     logger.warning("%s failed: %s", name, e)
             time.sleep(1.0)
 
+    def _bar_lag(self) -> int:
+        """Seconds after a 5-minute close before its candle is in the engine's bars (Yahoo re-reads them later)."""
+        feed = getattr(self.e, "feed", None)
+        return 2 if getattr(feed, "mode", "") == "angel" else int(self.e.settings.get("data.bar_delay_seconds", 20)) + 3
+
     def _loop(self):
         while True:
+            open_ = False
             try:
                 now = cal.now_ist()
                 open_ = cal.session_state(now) == "OPEN"
                 age = time.time() - self._last
-                # in the session: just after each minute's candle closes; otherwise every 30 minutes
-                due = (age >= 55 and now.second >= 2) if open_ else age >= 1800
+                # in the session: just after each minute's candle closes, and just after each 5-minute close (a zone
+                # given at that close reaches the board in seconds); otherwise every 30 minutes
+                lag, since = self._bar_lag(), (now.minute % cal.BAR_MINUTES) * 60 + now.second
+                due = ((age >= 55 and now.second >= 2) or (since >= lag and age > since - lag + 1)) if open_ else age >= 1800
                 if due:
                     self.e.jobs["order_blocks"] = {"state": "running", "started_at": time.time(), "message": ""}
                     msg = self.refresh()
@@ -443,4 +573,13 @@ class OrderBlockBoard:
                 self.error = str(e)
                 self.e.jobs["order_blocks"] = {"state": "failed", "finished_at": time.time(), "message": str(e)}
                 self._last = time.time()
+            if open_:
+                try:
+                    self._scan(time.time())
+                except Exception as e:                   # a heads-up is an extra: never stop the board
+                    if str(e) != self._scan_err:
+                        logger.warning("order-block heads-up failed: %s", e)
+                    self._scan_err = str(e)
+            elif self.heads:
+                self.heads = {}
             time.sleep(1.0)

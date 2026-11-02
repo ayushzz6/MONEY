@@ -11,11 +11,17 @@ first_trigger() is the same rule on one stock's 5-minute bars, for the Time Mach
 re-test. The board ranks every F&O stock together, so one stock's history cannot say whether it was a pick: there
 it is the first return to the stock's current zone on the side its own strength points, filled at Z (or at the
 bar's open when it opened past Z) inside that bar.
+
+Order-block first stage (OrderBlockFirstStage) is the same setup without waiting for the retest: it enters at the
+live price within `window_bars` candles after the zone is given, before the price comes back to Z, with the same
+stop and the target as given (T2 when the zone was given, else `target_r` x the risk). Its history rule enters at
+the close of the candle that gave the zone.
 """
+import time
 from typing import List, Optional, Tuple
 
 from market import orderblocks as OB
-from market.calendar import OPEN_MIN, SESSION_BARS, hhmm, minute_of, to_ist
+from market.calendar import BAR_MINUTES, OPEN_MIN, SESSION_BARS, hhmm, minute_of, to_ist
 from market.candles.bars import Bar
 from scanner.features.daily import DailyStats
 from strategies.base import BaseStrategy, DayContext, Signal
@@ -41,6 +47,10 @@ class OrderBlockRetest(BaseStrategy):
     def armed(self, row: dict, ctx: DayContext) -> bool:
         """A board row that enters when its live price comes back to Z."""
         return self.why_not(row, ctx) is None
+
+    def armed_text(self, row: dict) -> str:
+        """What an armed row is waiting for (the order-block page's paper line)."""
+        return f"{'buys' if row['side'] > 0 else 'sells'} the moment the price comes back to Z"
 
     def why_not(self, row: dict, ctx: DayContext) -> Optional[str]:
         """Why a board row is not armed, or None when it is."""
@@ -121,4 +131,97 @@ class OrderBlockRetest(BaseStrategy):
                 context={"fill": "limit", "zone_bottom": round(zz.bottom, 2), "zone_top": round(zz.top, 2),
                          "invalid": round(zz.invalid, 2), "given_at": given},
                 reason=f"came back to Z {zz.z:.2f} of the order block given at {given}")
+        return None
+
+
+class OrderBlockFirstStage(OrderBlockRetest):
+    name = "order_block_first"
+    label = "Order-block first stage"
+
+    def _window_end(self, z: dict) -> int:
+        return int(z["known_at"]) + int(self.params.get("window_bars", 1)) * BAR_MINUTES * 60
+
+    def armed_text(self, row: dict) -> str:
+        end = to_ist(self._window_end(row["zone"])).strftime("%H:%M")
+        return f"{'buys' if row['side'] > 0 else 'sells'} at the live price until {end}, unless the price comes back to Z first"
+
+    def why_not(self, row: dict, ctx: DayContext, now: Optional[float] = None) -> Optional[str]:
+        """Why a board row is not armed, or None when it is (now: epoch seconds, default the clock)."""
+        z, side = row.get("zone"), row.get("side") or 0
+        if self.params.get("picks_only", True) and row.get("rule") != "pick":
+            return "only the board's picks are traded"
+        need = int(self.params.get("min_aligned", 4))
+        if (row.get("aligned") or 0) < need:
+            return f"{row.get('aligned') or 0} of 4 checks aligned, needs {need}"
+        if not z or not side:
+            return "no order block yet"
+        if z.get("status") == "broken":
+            return "its zone broke"
+        if z.get("entry_at"):
+            return f"the price came back to Z at {to_ist(z['entry_at']).strftime('%H:%M')}: the first stage is over"
+        if (time.time() if now is None else now) > self._window_end(z):
+            return (f"the first stage ended at {to_ist(self._window_end(z)).strftime('%H:%M')} "
+                    f"(the zone was given at {to_ist(z['known_at']).strftime('%H:%M')})")
+        if side < 0 and not ctx.allow_short:
+            return "a bearish zone is a short sale, and short selling is off (allow_short)"
+        return None
+
+    def from_board(self, row: dict, price: float, bars: List[Bar], now) -> Tuple[Optional[Signal], Optional[str]]:
+        """(signal, None): the zone was just given and the live price is still on the target side of Z.
+        (None, None): the window ended, the price is back at Z (the retest's trade), or the candles closed since the
+        board last looked touched or broke the zone."""
+        z, side = row["zone"], row["side"]
+        if now.timestamp() > self._window_end(z):
+            return None, None
+        for b in bars:
+            if b.start < z["known_at"]:
+                continue
+            if ((b.l <= z["z"]) if side > 0 else (b.h >= z["z"])) or \
+                    ((b.c < z["bottom"]) if side > 0 else (b.c > z["top"])):
+                return None, None
+        if (price <= z["z"]) if side > 0 else (price >= z["z"]):
+            return None, None
+        risk = abs(price - z["invalid"])
+        given = to_ist(z["known_at"]).strftime("%H:%M")
+        sig = Signal(
+            symbol=row["symbol"], strategy=self.name, side=SIDE[side], bar_index=max(0, len(bars) - 1),
+            slot=max(0, min(SESSION_BARS - 1, (minute_of(now) - OPEN_MIN) // 5)), time=now.strftime("%H:%M"),
+            entry=round(price, 2), level=z["z"], stop_rule=str(self.params.get("stop", "zone")),
+            target_r=float(self.params.get("target_r", 2.0)), stop_hint=z["invalid"],
+            target_hint=self._target(z.get("given_targets") or [], side, price, risk),
+            context={"fill": "market at the first stage", "zone_bottom": z["bottom"], "zone_top": z["top"], "z": z["z"],
+                     "invalid": z["invalid"], "given_targets": z.get("given_targets") or [], "given_at": given,
+                     "board_rank": row.get("rank"), "aligned": row.get("aligned"), "strong": z.get("strong")},
+            reason=f"first stage: entered at {price:.2f} right after the {'bullish' if side > 0 else 'bearish'} order block "
+                   f"was given at {given}, without waiting for the retest to Z {z['z']:.2f} "
+                   f"(pick #{row.get('rank')}, {row.get('aligned')}/4 aligned)")
+        return sig, None
+
+    def first_trigger(self, bars: List[Bar], daily: Optional[DailyStats], ctx: DayContext) -> Optional[Signal]:
+        """The first zone of the day given on the side the stock's strength points, entered at the close of the
+        candle that gave it (the next candles decide the trade)."""
+        if len(bars) < 2 or not self.wants(daily):
+            return None
+        at = {b.start: i for i, b in enumerate(bars)}
+        for zz in sorted(OB.detect_zones(bars, daily.prev_high, daily.prev_low), key=lambda x: x.formed_at):
+            t, side = at[zz.formed_at], zz.side
+            if side < 0 and not ctx.allow_short:
+                continue
+            if t + 1 >= len(bars) or not ctx.entry_from <= bars[t].close_minute <= ctx.entry_until:
+                continue
+            st = OB.strength(bars[:t + 1], daily.close, daily.atr14)
+            if OB.event_risk(st) or (1 if st["score"] > 0 else -1 if st["score"] < 0 else 0) != side:
+                continue
+            fill = bars[t].c
+            if (fill <= zz.invalid) if side > 0 else (fill >= zz.invalid):
+                continue
+            given = hhmm(bars[t].close_minute)
+            return Signal(
+                symbol=ctx.symbol, strategy=self.name, side=SIDE[side], bar_index=t, slot=bars[t].slot, time=given,
+                entry=round(fill, 2), level=round(zz.z, 2), stop_rule=str(self.params.get("stop", "zone")),
+                target_r=float(self.params.get("target_r", 2.0)), stop_hint=zz.invalid,
+                target_hint=self._target(zz.given_targets, side, fill, abs(fill - zz.invalid)),
+                context={"fill": "market", "zone_bottom": round(zz.bottom, 2), "zone_top": round(zz.top, 2),
+                         "invalid": round(zz.invalid, 2), "given_at": given},
+                reason=f"first stage: entered at the close that gave the order block ({given}), Z {zz.z:.2f}")
         return None
