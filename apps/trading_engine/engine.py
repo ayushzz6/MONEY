@@ -360,9 +360,10 @@ class Engine:
                 if sig:
                     self.pipeline.on_signal(sig, strat, now, date, skip=why)
 
-    def board_paper(self) -> dict:
-        """What the paper order-block strategy is doing with each board stock today (order-block page)."""
-        strat = next((s for s in self.strategies if s.live_trigger == "board"), None)
+    def board_paper(self, name: Optional[str] = None) -> dict:
+        """What a paper order-block strategy (the first board strategy, or `name`) is doing with each board stock
+        today (order-block page)."""
+        strat = next((s for s in self.strategies if s.live_trigger == "board" and (name is None or s.name == name)), None)
         b = self.obboard.view()
         if strat is None or not b.get("ready"):
             return {}
@@ -390,8 +391,7 @@ class Engine:
                 st = {"state": s["decision"].lower(), "text": f"{s['decision'].lower().replace('_', ' ')} at {s['time']}: {s['why']}"}
             else:
                 no = strat.why_not(row, ctx) or when
-                st = {"state": "idle", "text": "not armed: " + no} if no else \
-                    {"state": "armed", "text": f"armed: {'buys' if row['side'] > 0 else 'sells'} the moment the price comes back to Z"}
+                st = {"state": "idle", "text": "not armed: " + no} if no else {"state": "armed", "text": "armed: " + strat.armed_text(row)}
             out["rows"][sym] = st
         return out
 
@@ -634,6 +634,7 @@ class Engine:
             "watchlist": self.watch_rows() if self.pipeline else [],
             "signals": (self.pipeline.signals[:150] if self.pipeline else []),
             "trades": trades, "alerts": list(self.alerts)[:150], "price_alerts": self.price_alerts,
+            "ob_alerts": self.obboard.alerts_status(),
             "news": self.news.latest(80), "strategies": strat_rows, "jobs": self.jobs, "scan": scan,
             "intel": self.intel_view(),
             "backtest": {k: v for k, v in (self.backtest or {}).items() if k != "trades"},

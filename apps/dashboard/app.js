@@ -235,6 +235,8 @@
       itab = b.dataset.itab; store.set("mv2.itab", itab); renderIntel(true);
     } else if (b && b.dataset.obtab) {
       obTab = b.dataset.obtab; store.set("mv2.obtab", obTab); renderOB(false); drawOB();
+    } else if (b && b.dataset.obalerts) {
+      toggleAlerts();
     } else if (e.target.closest("[data-cx]") && !b) {
       e.preventDefault();
       cxSelect(e.target.closest("[data-cx]").dataset.cx);
@@ -278,6 +280,7 @@
   function render() {
     renderShell();
     renderPage();
+    obAlertsPoll();
     if (!selected) {
       const open = openTrades()[0];
       const first = open ? open.symbol : (S.watchlist[0] || {}).symbol;
@@ -356,6 +359,7 @@
     setCount("#nc-signals", (S.signals || []).length);
     setCount("#nc-trades", openTrades().length);
     setCount("#nc-intel", ((S.intel || {}).results_soon || []).length);
+    setCount("#nc-ob", (S.ob_alerts || {}).active || 0, true);           // order-block heads-up right now
   }
 
   // ------------------------------------------------------------------ HOME
@@ -591,6 +595,10 @@
     order_block: (p) => [`Takes the Order blocks page's picks${p.min_aligned ? ` with ${p.min_aligned} of 4 checks aligned` : ""}, while price has not yet come back to the zone.`,
       `Enters the moment the live price comes back to the zone's entry level Z (bearish zones only when short selling is on). One try per stock a day.`,
       ...(p.paper_only ? [`Paper only: it never trades real money. Its 2-year backtest lost money; this is a forward test.`] : [])],
+    order_block_first: (p) => [`Takes the same picks${p.min_aligned ? ` with ${p.min_aligned} of 4 checks aligned` : ""}, but does not wait for the retest.`,
+      `Enters at the live price in the ${(p.window_bars || 1) * 5} minutes after the zone is given, before the price comes back to Z. Stop: the zone's invalidation; target: the levels as given when the zone appeared. One try per stock a day.`,
+      `The stop is further away than at Z, so the risk rules' minimum reward:risk refuses the entries whose target is too close.`,
+      ...(p.paper_only ? [`Paper only: it never trades real money. Not backtested yet; this is a forward test.`] : [])],
   };
   const targetText = (p) => (p.target ? `the zone's ${String(p.target).toUpperCase() === "T1" ? "1st" : "2nd"} liquidity level (${String(p.target).toUpperCase()}), or ${p.target_r || 2}× the risk if it has none`
     : `${p.target_r || "?"}× the risk (${p.target_r || "?"}R)`);
@@ -880,7 +888,7 @@
     }
     return best;
   }
-  const SNAME = { orb: "ORB", level_breakout: "20D high", vwap_reclaim: "VWAP", order_block: "OB" };
+  const SNAME = { orb: "ORB", level_breakout: "20D high", vwap_reclaim: "VWAP", order_block: "OB", order_block_first: "OB first" };
   function renderLive() {
     const rows = S.watchlist || [];
     const q = ($("#watch-filter").value || "").trim().toUpperCase();
@@ -1096,8 +1104,81 @@
   const zEntry = (z) => (z && z.entry_at ? fmtIST(z.entry_at) : null);
   const zWhen = (z) => `given ${zGiven(z)} · ${zEntry(z) ? "entry " + zEntry(z) : "no entry yet"}`;
   const PCHIP = { traded: "good", armed: "good", idle: "", off: "", skipped: "warn", blocked: "bad", refused: "warn", benched: "bad", stale: "warn" };
-  const paperOf = (sym) => (((ob && ob.paper) || {}).rows || {})[sym];
-  const paperLine = (sym) => { const x = paperOf(sym); return x ? `<span class="chip ${PCHIP[x.state] || ""}">Paper</span> ${esc(x.text)}` : ""; };
+  // two paper strategies trade the board: the retest (ob.paper) and the first stage (ob.paper_first)
+  const paperOf = (sym, k = "paper") => (((ob && ob[k]) || {}).rows || {})[sym];
+  const paperLine = (sym, k = "paper") => { const x = paperOf(sym, k); return x ? `<span class="chip ${PCHIP[x.state] || ""}">${k === "paper" ? "Paper · retest" : "Paper · first stage"}</span> ${esc(x.text)}` : ""; };
+  // targets as given: the levels when the zone was given (they stay); next levels now: ahead of the price (they move)
+  const tList = (t) => (t && t.length ? t.map((v, i) => `T${i + 1} ${px(v)}`).join(" · ") : null);
+  const zGivenTargets = (z) => tList(z.given_targets) || `${px(z.z + 2 * (z.z - z.invalid))} (2R: no level ahead)`;
+  const firstWin = () => { const s = ((S && S.strategies) || []).find((x) => x.name === "order_block_first"); return 300 * ((s && s.params && s.params.window_bars) || 1); };
+  // heads-up (the board, every second): a break forming, a zone just given (the first-stage plan), the price near Z
+  const HEADS = { break: ["blue", (s) => (s > 0 ? "breaking out" : "breaking down")], given: ["good", () => "zone given · first stage"], near: ["warn", () => "near Z"] };
+  const obHeadFl = {}, obHeadKey = {};    // a heads-up chip flashes once when it appears
+  const headChip = (r) => { const k = r.heads && HEADS[r.heads.kind]; return k ? `<span class="chip ${k[0]} heads ${obHeadFl[r.symbol] ? "flash-up" : ""}">${esc(k[1](r.side))}</span>` : ""; };
+  function headText(r) {
+    const h = r.heads, buy = r.side > 0;
+    if (!h) return "";
+    if (h.kind === "break") return `₹${px(h.price)} is ${buy ? "above" : "below"} the swing ${buy ? "high" : "low"} ${px(h.level)}: if the ${fmtIST(h.closes - 300)} candle closes there, Z ${px(h.z)} · SL ${px(h.stop)}${h.t.length ? " · " + tList(h.t) : ""}`;
+    if (h.kind === "given") return `first stage now ₹${px(h.price)} · SL ${px(h.stop)} · target ${px(h.target)} · R:R 1:${h.rr.toFixed(1)} · until ${fmtIST(h.until)}${h.gate ? ` · the risk check would refuse: ${h.gate}` : " · passes the price checks"}`;
+    return `₹${px(h.dist)} (${h.dist_atr.toFixed(2)} ATR) from Z ${px(h.z)}, not touched yet`;
+  }
+  // today's heads-up log (the server's), polled from /api/state on every page; a beep and a notification for new ones
+  let obAlerts = [], obAlertSeq = null, obAlertDay = null, obAlertsBusy = false, audio = null;
+  const obAlertsOn = () => store.get("mv2.obalerts", "0") === "1";
+  async function obAlertsPoll() {
+    const a = S && S.ob_alerts;
+    if (!a || obAlertsBusy) return;
+    const first = obAlertSeq === null || a.seq < obAlertSeq;     // first look, or the engine restarted
+    if (!first && a.seq === obAlertSeq) return;
+    obAlertsBusy = true;
+    try {
+      const r = await api("/api/ob/alerts?after=" + (first ? 0 : obAlertSeq));
+      obAlerts = first || r.day !== obAlertDay ? r.alerts : obAlerts.concat(r.alerts).slice(-300);
+      obAlertSeq = r.seq; obAlertDay = r.day;
+      if (!first && r.alerts.length && obAlertsOn()) { beep(); r.alerts.forEach(notifyAlert); }
+      if (page === "ob" && obTab === "board" && ob && ob.ready) keepPlace($("#ob-board"), drawOBBoard);
+    } catch (e) { /* the next poll tries again */ } finally { obAlertsBusy = false; }
+  }
+  function beep() {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === "suspended") audio.resume();
+      const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
+      o.type = "sine"; o.frequency.setValueAtTime(880, t); o.frequency.setValueAtTime(1175, t + 0.12);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g); g.connect(audio.destination); o.start(t); o.stop(t + 0.32);
+    } catch (e) { /* no sound in this browser */ }
+  }
+  function notifyAlert(a) {
+    try {
+      if (!window.Notification || Notification.permission !== "granted") return;
+      const n = new Notification(`MONEYV2 · ${a.sym}`, { body: a.text, tag: "mv2-ob-" + a.seq });
+      n.onclick = () => { window.focus(); obSel = a.sym; store.set("mv2.obsym", a.sym); location.hash = "#ob"; n.close(); };
+    } catch (e) { /* notifications blocked */ }
+  }
+  async function toggleAlerts() {
+    const on = !obAlertsOn();
+    store.set("mv2.obalerts", on ? "1" : "0");
+    if (on) {
+      beep();                                       // this click lets the page play sound
+      if (window.Notification && Notification.permission === "default") { try { await Notification.requestPermission(); } catch (e) { /* old browser */ } }
+      toast(window.Notification && Notification.permission === "granted" ? "Heads-up alerts on: a beep and a notification for each new one"
+        : "Heads-up alerts on: a beep for each new one (this browser blocks notifications for this page: allow them in its site settings)");
+    } else toast("Heads-up alerts off");
+    if (page === "ob" && ob && ob.ready) keepPlace($("#ob-board"), drawOBBoard);
+  }
+  // after a reload, sound needs one click or key press on the page before it can play
+  const unlockAudio = () => { if (obAlertsOn() && (!audio || audio.state === "suspended")) { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) { /* no sound */ } } };
+  document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  document.addEventListener("keydown", unlockAudio);
+  function firstStage(r, z) {
+    if (!z) return "–";
+    if (r.heads && r.heads.kind === "given") return `<b>now</b>: ${esc(headText(r))}`;
+    if (z.entry_at) return `over: the price came back to Z at ${zEntry(z)} (the retest's trade)`;
+    const end = z.known_at + firstWin();
+    return Date.now() / 1000 > end ? `over: it was ${zGiven(z)}–${fmtIST(end)}, right after the zone was given`
+      : `until ${fmtIST(end)}: near the live price · SL ${px(z.invalid)} · aiming for ${zGivenTargets(z)}`;
+  }
   function loadOB() {
     return once("ob", async () => {
       try { ob = await api("/api/ob/board"); } catch (e) { ob = { ready: false, error: e.message }; }
@@ -1121,11 +1202,15 @@
       if (!x) continue;
       r.live_last = x.last; r.change_pct = x.chg;
       if (x.confirm) r.confirm = x.confirm;
+      r.heads = x.heads || null;
       if (seen.has(r.symbol)) continue;
       seen.add(r.symbol);
       const was = obPrevPx[r.symbol];
       obFl[r.symbol] = was == null || x.last === was ? "" : x.last > was ? "flash-up" : "flash-down";
       obPrevPx[r.symbol] = x.last;
+      const hk = x.heads ? `${x.heads.kind}:${x.heads.closes || x.heads.formed}` : "";
+      obHeadFl[r.symbol] = !!hk && hk !== obHeadKey[r.symbol];
+      obHeadKey[r.symbol] = hk;
     }
     for (const p of ob.map || []) if (L.chg[p.symbol] != null) p.change_pct = L.chg[p.symbol];
     if (L.index_chg != null) ob.index_chg = L.index_chg;
@@ -1176,7 +1261,7 @@
     }
     const draw = { board: drawOBBoard, confirm: drawOBConfirm, map: drawOBMap, sectors: drawOBSectors }[obTab];
     if (draw) keepPlace($("#ob-" + obTab), draw);
-    if (fromTick) { obDetailLive(); for (const k in obFl) obFl[k] = ""; }
+    if (fromTick) { obDetailLive(); for (const k in obFl) obFl[k] = ""; for (const k in obHeadFl) obHeadFl[k] = false; }
     else loadOBDetail(obSel, false);
   }
   const obPx = (r) => `<span class="num ${obFl[r.symbol] || ""}">₹${px(r.live_last != null ? r.live_last : r.last)}</span>`;
@@ -1189,9 +1274,11 @@
       <div class="lv">${z ? `<span>${r.side < 0 ? "Sell zone" : "Buy zone"}</span><span>${px(z.bottom)} – ${px(z.top)} (${esc(z.status)})</span>
         <span>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</span><span><b>${px(z.z)}</b> · given ${zGiven(z)}</span>
         <span>Stop-loss</span><span><b class="neg">${px(z.invalid)}</b></span>
-        <span>Target</span><span><b class="pos">${zTargets(z)}</b></span><span>R:R</span><span>${rr(z)}</span>
+        <span>Target as given</span><span><b class="pos">${zGivenTargets(z)}</b></span>
+        <span>Next levels</span><span>${zTargets(z)}</span><span>R:R</span><span>${rr(z)}</span>
         <span>Entry signal</span><span>${zEntry(z) ? `back at Z ${zEntry(z)}` : (ob.live ? "waiting for price to return" : "price never returned")}</span>`
-        : `<span>Zone</span><span>no order block yet</span>`}</div>${paperOf(r.symbol) ? `<div class="small paper-line">${paperLine(r.symbol)}</div>` : ""}</div>`;
+        : `<span>Zone</span><span>no order block yet</span>`}</div>${r.heads ? `<div class="small heads-line">${headChip(r)} ${esc(headText(r))}</div>` : ""}
+      ${["paper", "paper_first"].map((k) => (paperOf(r.symbol, k) ? `<div class="small paper-line">${paperLine(r.symbol, k)}</div>` : "")).join("")}</div>`;
   }
   function alignDots(r) {
     const c = r.checks || {};
@@ -1209,13 +1296,25 @@
         <td class="num">${r.rank}${d}</td><td><b>${esc(r.symbol)}</b><span class="name">${esc(r.sector)}${r.oi_buildup ? " · OI: " + esc(r.oi_buildup) : ""}</span></td>
         <td class="r ${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}<span class="name">${obPx(r)}</span></td>
         <td class="num"><span class="sbar" style="width:${(42 * Math.abs(r.score) / mx).toFixed(0)}px;background:${side > 0 ? "var(--up)" : "var(--down)"}"></span>${(r.score || 0).toFixed(2)}<span class="name">p${r.pctile} · straight ${Math.round(100 * (r.clean || 0))}%</span></td>
-        <td>${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${px(z.z)} · ${rr(z)}</span><span class="name num">SL <span class="neg">${px(z.invalid)}</span> · T <span class="pos">${px(zTarget(z))}</span></span><span class="name num">${zWhen(z)}</span>` : `<span class="muted small">${r.event ? "no levels" : "none yet"}</span>`}</td>
+        <td>${headChip(r)}${z ? `<span class="chip ${zc[0]}">${zc[1]}</span><span class="name num">Z ${px(z.z)} · ${rr(z)}</span><span class="name num">SL <span class="neg">${px(z.invalid)}</span> · T <span class="pos">${px(zTarget(z))}</span></span><span class="name num">${zWhen(z)}</span>` : `<span class="muted small">${r.event ? "no levels" : "none yet"}</span>`}${r.heads ? `<span class="name" title="${esc(headText(r))}">${esc(headText(r))}</span>` : ""}</td>
         <td>${rule}<span class="name">${alignDots(r)} ${r.aligned}/4</span></td></tr>`;
     }).join("")}</tbody></table></div>`;
   }
+  function obAlertsCard() {
+    const on = obAlertsOn(), rows = obAlerts.slice(-40).reverse();
+    return `<div class="card flush ob-alerts"><div class="card-head"><h2>Heads-up</h2>
+        <span class="muted small">a break forming · a zone just given (first stage) · the price near Z · today, newest first</span>
+        <span class="grow"></span><button class="small" data-obalerts="1" aria-pressed="${on}">${on ? "Alerts on: beep + notification" : "Alerts off: turn on"}</button></div>
+      ${rows.length ? `<div class="table-wrap"><table class="ob-table"><tbody>${rows.map((a) => {
+        const k = HEADS[a.kind] || ["", () => a.kind];
+        return `<tr class="clickable" data-ob="${esc(a.sym)}" tabindex="0"><td class="num">${fmtIST(a.at)}</td><td><b>${esc(a.sym)}</b></td>
+          <td><span class="chip ${k[0]}">${esc(k[1](a.side))}</span></td><td class="small wrap">${esc(a.text)}</td></tr>`;
+      }).join("")}</tbody></table></div>`
+        : `<p class="empty">${ob.live ? `Nothing yet today. Each heads-up is listed here once${on ? ", with a beep and a notification" : "; turn Alerts on for a beep and a notification"}.` : "Heads-up runs during the session."}</p>`}</div>`;
+  }
   function drawOBBoard() {
     const picks = ob.picks || [];
-    $("#ob-board").innerHTML = `${picks.length ? `<div class="ob-picks">${picks.map(pickCard).join("")}</div>` : `<div class="card"><p class="empty">No picks: nothing passed the rules${ob.live ? " yet" : " this session"}.</p></div>`}
+    $("#ob-board").innerHTML = `${obAlertsCard()}${picks.length ? `<div class="ob-picks">${picks.map(pickCard).join("")}</div>` : `<div class="card"><p class="empty">No picks: nothing passed the rules${ob.live ? " yet" : " this session"}.</p></div>`}
       <div class="ob-boards">
         <div class="card flush"><div class="card-head"><h2 class="side-bull">Bullish board</h2><span class="muted small">top 20 by strength · for buyers</span></div>${obTable(ob.bullish || [], 1)}</div>
         <div class="card flush"><div class="card-head"><h2 class="side-bear">Bearish board</h2><span class="muted small">top 20 by strength · for sellers</span></div>${obTable(ob.bearish || [], -1)}</div>
@@ -1378,6 +1477,7 @@
         add(z.invalid, cssVar("--critical"), 0, "stop-loss", 2);
         z.targets.forEach((t, i) => add(t, cssVar("--good"), 2, `T${i + 1}`, 1));
         if (!z.targets.length) add(zTarget(z), cssVar("--good"), 2, "2R", 1);
+        (z.given_targets || []).forEach((t, i) => { if (!z.targets.includes(t)) add(t, cssVar("--good"), 1, `T${i + 1} as given`, 1); });
         z.behind.forEach((t) => add(t, cssVar("--warning"), 3, "", 1));
       }
       const marks = [];
@@ -1391,8 +1491,19 @@
       if (d.cpr) { add(d.cpr.tc, cssVar("--cpr"), 2, "CPR top"); add(d.cpr.bc, cssVar("--cpr"), 2, "CPR bottom"); }
       if (obChartSym !== d.symbol) { obChart.timeScale().fitContent(); obChartSym = d.symbol; }
       obChartTail();
+      obHeadLineSync();
     }
     drawOBFields();
+  }
+  // while a break is forming: the swing level it is breaking, on the chart (kept in step every second)
+  let obHeadLine = null, obHeadLevel = null;
+  function obHeadLineSync() {
+    if (!obCandles) return;
+    const d = obDetail, r = d && !d.error ? obRows().find((x) => x.symbol === d.symbol) : null, h = r && r.heads;
+    const want = h && h.kind === "break" ? h.level : null;
+    if (obHeadLine && want !== obHeadLevel) { try { obCandles.removePriceLine(obHeadLine); } catch (e) { /* chart reset */ } obHeadLine = null; }
+    if (want != null && !obHeadLine) obHeadLine = obCandles.createPriceLine({ price: want, color: cssVar("--series-1"), lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `swing ${r.side > 0 ? "high" : "low"}: breaking` });
+    obHeadLevel = obHeadLine ? want : null;
   }
   // the candles that closed since the board's last refresh, and the forming one (from the live poll)
   function obChartTail() {
@@ -1407,6 +1518,7 @@
     const d = obDetail;
     if (!d || d.error || page !== "ob") return;
     obChartTail();
+    obHeadLineSync();
     drawOBFields();
   }
   function drawOBFields() {
@@ -1420,15 +1532,18 @@
       <dt>Rank</dt><dd>${r.pctile != null ? `p${r.pctile} (stronger than ${r.pctile}% of F&amp;O stocks)` : "–"}</dd>
       <dt>Rule</dt><dd>${r.rule === "pick" ? `<span class="chip good">Pick</span>` : esc(r.rule || "–")}</dd>
       <dt>Price</dt><dd><b>₹${px(r.live_last != null ? r.live_last : r.last)}</b> · <span class="${pnlClass(r.change_pct)}">${pct(r.change_pct, 2)}</span>${r.live_last != null ? ` <span class="muted small">live</span>` : ""}</dd>
+      <dt>Heads-up</dt><dd>${r.heads ? `${headChip(r)} ${esc(headText(r))}` : d.live ? `<span class="muted">none right now</span>` : "–"}</dd>
       <dt>Strength</dt><dd>${r.move_atr != null ? r.move_atr.toFixed(2) + " ATR" : "–"} · straight ${Math.round(100 * (r.clean || 0))}% <span class="muted small">(finished candles)</span></dd>
       <dt>Order block</dt><dd>${z ? `${px(z.bottom)} – ${px(z.top)} · ${esc(z.status)}${z.visits ? ` (${z.visits} visit${z.visits > 1 ? "s" : ""})` : ""}${z.strong ? " · strong push" : ""}` : (r.event ? "none: event risk" : "none yet")}</dd>
       <dt>${r.side < 0 ? "Sell at Z" : "Buy at Z"}</dt><dd>${z ? `${px(z.z)} · given at ${zGiven(z)}, when the ${fmtIST(z.formed_at)} candle closed through the last swing ${z.side > 0 ? "high" : "low"}` : "–"}</dd>
       <dt>Entry signal</dt><dd>${!z ? "–" : zEntry(z) ? `price came back to Z in the ${zEntry(z)}–${fmtIST(z.entry_at + 300)} candle (a limit order at Z fills there)`
         : d.live ? "not yet: waiting for price to come back to Z" : "price never came back to Z that session"}</dd>
+      <dt>First stage</dt><dd>${d.live ? firstStage(r, z) : z ? `${zGiven(z)}–${fmtIST(z.known_at + firstWin())}, right after the zone was given` : "–"}</dd>
       <dt>Stop-loss</dt><dd>${z ? `<b class="neg">${px(z.invalid)}</b> · risk ${zRisk(z)} from Z (just past the zone: a 5-minute close beyond it ends the idea)` : "–"}</dd>
-      <dt>Target</dt><dd>${z ? `<b class="pos">${zTargets(z)}</b>${z.targets.length > 1 ? " · the paper trade aims for T2" : ""}` : "–"}</dd>
+      <dt>Target as given</dt><dd>${z ? `<b class="pos">${zGivenTargets(z)}</b> · the levels when the zone was given (${zGiven(z)}); they stay${z.given_rr != null ? ` · R:R 1:${z.given_rr.toFixed(1)} from Z` : ""} · the first-stage trade aims for the last one` : "–"}</dd>
+      <dt>Next levels now</dt><dd>${z ? `${zTargets(z)} · ahead of the latest close, so they move with the price${z.targets.length > 1 ? " · the retest trade aims for T2 of these when it enters" : ""}` : "–"}</dd>
       <dt>R:R</dt><dd>${z ? `${rr(z)}${be != null ? ` · needs ${be}% winners to break even before costs` : ""}` : "–"}</dd>
-      <dt>Paper trade</dt><dd>${paperLine(d.symbol) || "–"}</dd>
+      <dt>Paper trades</dt><dd>${[paperLine(d.symbol), paperLine(d.symbol, "paper_first")].filter(Boolean).join("<br>") || "–"}</dd>
       <dt>OI yesterday</dt><dd>${r.oi_buildup ? `${esc(r.oi_buildup)} (${pct(r.oi_chg_pct, 1)} futures OI)` : "–"}</dd>
       <dt>Daily ATR</dt><dd>${px(r.atr)}</dd></dl>
       <div class="checks"><b>Alignment ${r.aligned ?? 0}/4</b>
@@ -1436,7 +1551,8 @@
         <span>${c.breadth ? "✓" : "✗"} most F&amp;O stocks move the same way</span><span>${c.vwap ? "✓" : "✗"} price is on the right side of VWAP</span></div>
       <div class="checks"><b>Confirmations ${r.confirm ? `${r.confirm.score}/${r.confirm.of}` : "–"}</b>
         ${((ob && ob.confirm_rules) || []).map((x) => { const k = r.confirm && r.confirm.checks[x.key]; return `<span>${!k || k.ok == null ? "–" : k.ok ? "✓" : "✗"} ${esc(x.label)}: ${esc((k && k.text) || "no data")}</span>`; }).join("")}</div>
-      <p class="note">4 of 4: full attention · 3 of 4: smaller size · 2 or fewer: usually a pass. Wait for price to come back to the zone; chasing worsens R:R.</p></div>`;
+      <p class="note">4 of 4: full attention · 3 of 4: smaller size · 2 or fewer: usually a pass. Waiting for price to come back to the zone gives the tightest stop;
+        the first stage enters right away, so its stop is wider and its R:R smaller. Neither the heads-up nor the first stage is backtested yet.</p></div>`;
   }
   function renderHomeOB() {
     const el = $("#home-ob");

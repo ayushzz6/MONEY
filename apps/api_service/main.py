@@ -207,11 +207,16 @@ def create_app(engine) -> FastAPI:
 
     @app.get("/api/ob/board")
     def ob_board():
-        return _json(dict(engine.obboard.view(), paper=engine.board_paper()))
+        return _json(dict(engine.obboard.view(), paper=engine.board_paper("order_block"),
+                          paper_first=engine.board_paper("order_block_first")))
 
     @app.get("/api/ob/live")
     def ob_live(sym: Optional[str] = None, after: int = 0):
         return _json(engine.obboard.live_view(sym, after))
+
+    @app.get("/api/ob/alerts")
+    def ob_alerts(after: int = 0):
+        return _json(engine.obboard.alerts_view(after))
 
     @app.get("/api/ob/stock/{symbol}")
     def ob_stock(symbol: str):

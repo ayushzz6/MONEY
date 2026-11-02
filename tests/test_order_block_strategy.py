@@ -1,11 +1,12 @@
-"""Order-block retest strategy: the one-stock rule, the live board trigger, paper only."""
+"""Order-block retest and first-stage strategies: the one-stock rule, the live board trigger, paper only."""
 from backtesting.engine import run_day
 from backtesting.selection import strategy_allowed
 from helpers import FakeSettings, ist, make_day, session_start
 from market import orderblocks as OB
 from scanner.features.daily import DailyStats
 from strategies.base import DayContext
-from strategies.smc.order_block import OrderBlockRetest
+from strategies.ensemble import build_strategies
+from strategies.smc.order_block import OrderBlockFirstStage, OrderBlockRetest
 
 D = "2026-10-26"
 PARAMS = {"enabled": True, "paper_only": True, "picks_only": True, "min_aligned": 4, "stop": "zone", "target": "T2"}
@@ -121,3 +122,55 @@ def test_the_pipeline_journals_a_board_signal_once():
     out = p.on_signal(sig, s, ist(D, "10:17"), D, skip=why)
     assert out["decision"] == "SKIPPED" and out["strategy"] == "order_block" and p.signals[0] is out
     assert p.on_signal(sig, s, ist(D, "10:18"), D, skip=why) is None              # one try per stock a day
+
+
+# ------------------------------------------------------------ first stage: enter when the zone is given
+def first(**kw):
+    return OrderBlockFirstStage(dict(PARAMS, window_bars=1, **kw))
+
+
+def test_the_first_stage_enters_at_the_close_that_gives_the_zone_and_aims_for_t2_as_given():
+    sig = first().first_trigger(make_day(D, BASE + [RETEST] + AFTER), daily(), ctx())
+    assert sig and sig.side == "buy" and sig.bar_index == 5 and sig.time == "09:45" and sig.context["fill"] == "market"
+    assert sig.entry == 101.5 and 100.4 < sig.stop_hint < 100.5
+    assert sig.target_hint == 103.5                                              # T2 as given (yesterday's high)
+    r = run_day(first(), ctx(), make_day(D, BASE + [RETEST] + AFTER), daily(), FakeSettings(), 0.05, None)
+    assert r["outcome"] == "target" and r["plan"].entry == 101.5 and r["plan"].target == 103.5 and 1.7 < r["R"] < 1.9
+    late = first().first_trigger(make_day(D, BASE + [RETEST] + AFTER), daily(), ctx(entry_from=9 * 60 + 50))
+    assert late.time == "10:30" and late.entry == 103.5                          # the next zone given inside the hours
+    assert first().first_trigger(make_day(D, BASE + [RETEST] + AFTER), daily(), ctx(entry_until=9 * 60 + 40)) is None
+
+
+def test_the_first_stage_is_armed_only_in_the_candle_after_the_zone_is_given():
+    s = first()
+    row, _ = board_row()
+    z = row["zone"]
+    assert z["given_targets"] == [101.6, 103.5] and z["targets"] == [102.7, 103.5]   # frozen vs the moving levels
+    assert s.why_not(row, ctx(), ist(D, "09:47").timestamp()) is None
+    assert "first stage ended at 09:50" in s.why_not(row, ctx(), ist(D, "09:51").timestamp())
+    row["zone"] = dict(z, entry_at=session_start(D) + 7 * 300)
+    assert "came back to Z at 09:50" in s.why_not(row, ctx(), ist(D, "09:47").timestamp())
+    row, _ = board_row(aligned=3)
+    assert s.why_not(row, ctx(), ist(D, "09:47").timestamp()) == "3 of 4 checks aligned, needs 4"
+    assert "until 09:50" in s.armed_text(board_row()[0])
+
+
+def test_the_first_stage_board_trigger_buys_at_the_live_price_before_any_retest():
+    s = first()
+    row, bars = board_row()
+    now = ist(D, "09:47")
+    sig, why = s.from_board(row, 101.8, bars[:6], now)
+    assert why is None and sig.strategy == "order_block_first" and sig.entry == 101.8 and sig.time == "09:47"
+    assert sig.stop_rule == "zone" and sig.stop_hint == row["zone"]["invalid"] and sig.target_hint == 103.5
+    assert first(target="T1").from_board(row, 101.55, bars[:6], now)[0].target_hint == 101.6
+    assert s.from_board(row, 100.9, bars[:6], now) == (None, None)                 # back at Z: the retest's trade
+    assert s.from_board(row, 101.8, bars[:6], ist(D, "09:51")) == (None, None)     # the window ended
+    assert s.from_board(row, 101.8, make_day(D, BASE + [RETEST]), now) == (None, None)   # a candle came back to Z
+
+
+def test_the_first_stage_is_a_paper_only_board_strategy_from_the_config():
+    built = {x.name: x for x in build_strategies(FakeSettings())}
+    assert built["order_block_first"].live_trigger == "board" and built["order_block_first"].params["window_bars"] == 1
+    bt = {"overall": {"trades": 40}, "by_strategy": {"order_block_first": {"trades": 40, "avg_net_R": -0.3}}}
+    assert strategy_allowed(FakeSettings(), bt, "order_block_first")[0]
+    assert not strategy_allowed(FakeSettings(live=True), bt, "order_block_first")[0]

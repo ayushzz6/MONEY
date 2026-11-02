@@ -56,6 +56,16 @@
       "stop": "zone",
       "target": "T2",
       "target_r": 2.0
+    },
+    "order_block_first": {
+      "enabled": true,
+      "paper_only": true,
+      "picks_only": true,
+      "min_aligned": 4,
+      "window_bars": 1,
+      "stop": "zone",
+      "target": "T2",
+      "target_r": 2.0
     }
   },
   "market_filter": {
